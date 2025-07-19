@@ -1,7 +1,8 @@
-use uuid::Uuid;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
-pub struct TransactionSplit {
-    pub user_id: Uuid,
-    pub share: f64,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Balance {
+    pub user_id: String,
+    pub owes_to: String,
+    pub amount: f64,
 }

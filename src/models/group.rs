@@ -1,15 +1,44 @@
-use super::group_user::GroupUser;
-use chrono::{DateTime, Utc};
-use uuid::Uuid;
+use super::user::User;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")] // Ensures JSON uses "OWNER" / "MEMBER"
+pub enum Role {
+    Owner,
+    Member,
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Role::Owner => "OWNER",
+            Role::Member => "MEMBER",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupMember {
+    pub user: User,
+    pub role: Role,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Group {
-    pub id: Uuid,
+    pub id: String,
     pub name: String,
-    pub owner_id: Uuid,
-    pub strict_editing: bool,
+    pub members: Vec<GroupMember>,
     pub join_link: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub users: Vec<GroupUser>, // List of user IDs in the group, or empty array if none
+    pub strict_settlement_mode: bool,
+}
+
+impl GroupMember {
+    pub fn is_owner(&self) -> bool {
+        self.role == Role::Owner
+    }
+
+    pub fn is_member(&self) -> bool {
+        self.role == Role::Member
+    }
 }

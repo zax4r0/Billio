@@ -1,23 +1,17 @@
-use super::transaction_split::TransactionSplit;
-use chrono::{DateTime, Utc};
-use uuid::Uuid;
+use super::user::User;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-#[derive(Clone, Debug)]
-pub enum SplitType {
-    Equal,
-    Custom,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transaction {
-    pub id: Uuid,
-    pub group_id: Uuid,
-    pub payer_id: Uuid,
-    pub added_by: Uuid,
-    pub amount: f64,
+    pub id: String,
+    pub group_id: String,
     pub description: String,
-    pub splits: Vec<TransactionSplit>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub amount: f64,
+    pub paid_by: User,
+    pub splits: HashMap<String, f64>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub is_reversed: bool,
+    pub reverses: Option<String>,
+    pub reversed_by: Option<String>,
 }
