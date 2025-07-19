@@ -255,7 +255,6 @@ impl IntoResponse for ApiError {
     }
 }
 
-// API handlers
 async fn create_user(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
     Json(req): Json<CreateUserRequest>,
@@ -266,17 +265,17 @@ async fn create_user(
         email: req.email,
         username: req.username,
     };
-    let created_by = if let Some(id) = req.created_by_id {
+    let created_by_user = if let Some(ref id) = req.created_by_id {
         Some(
             service
-                .get_user(&id)
+                .get_user(id)
                 .await?
-                .ok_or_else(|| SplitwiseError::UserNotFound(id))?,
+                .ok_or_else(|| SplitwiseError::UserNotFound(id.clone()))?,
         )
     } else {
         None
     };
-    service.add_user(user, created_by.as_ref()).await?;
+    service.add_user(user, created_by_user.as_ref()).await?;
     Ok(StatusCode::CREATED)
 }
 

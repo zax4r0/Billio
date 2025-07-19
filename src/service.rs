@@ -1,5 +1,3 @@
-// src/service.rs
-
 use crate::constants::*;
 use crate::error::SplitwiseError;
 use crate::logger::LoggingService;
@@ -39,6 +37,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         if user.email.is_empty() {
             return Err(SplitwiseError::MissingEmail);
         }
+
         if self.storage.get_user_by_email(&user.email).await?.is_some() {
             return Err(SplitwiseError::EmailAlreadyRegistered(user.email));
         }
@@ -53,14 +52,6 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         Ok(())
     }
 
-    pub async fn get_user_by_email(&self, email: &str) -> Result<Option<User>, SplitwiseError> {
-        self.storage.get_user_by_email(email).await
-    }
-
-    fn is_group_member(group: &Group, user_id: &str) -> bool {
-        group.members.iter().any(|m| m.user.id == user_id)
-    }
-
     pub async fn create_group(
         &self,
         name: String,
@@ -70,6 +61,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         if self.storage.get_user(&created_by.id).await?.is_none() {
             return Err(SplitwiseError::UserNotFound(created_by.id.clone()));
         }
+
         let group_id = Uuid::new_v4().to_string();
         let join_link = Uuid::new_v4().to_string();
         let group = Group {
@@ -348,7 +340,11 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         self.validate_user(&new_owner.id).await?;
         self.validate_user(&transferred_by.id).await?;
         self.validate_owner(&group, &transferred_by.id)?;
-        if !Self::is_group_member(&group, &new_owner.id) {
+        if !self
+            .storage
+            .is_group_member(&group.id, &new_owner.id)
+            .await?
+        {
             return Err(SplitwiseError::NotGroupMember(new_owner.id.clone()));
         }
         group.members = group
@@ -434,6 +430,13 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             Some(created_by.id.as_str()),
         ).await?;
         Ok(transaction)
+    }
+
+    pub async fn get_transaction(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<Transaction>, SplitwiseError> {
+        self.storage.get_transaction(transaction_id).await
     }
 
     pub async fn reverse_transaction(
@@ -760,7 +763,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         Ok(group.members.clone())
     }
 
-    async fn get_group(&self, group_id: &str) -> Result<Group, SplitwiseError> {
+    pub async fn get_group(&self, group_id: &str) -> Result<Group, SplitwiseError> {
         self.storage
             .get_group(group_id)
             .await?
@@ -770,29 +773,6 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
     async fn validate_user(&self, user_id: &str) -> Result<(), SplitwiseError> {
         if self.storage.get_user(user_id).await?.is_none() {
             return Err(SplitwiseError::UserNotFound(user_id.to_string()));
-        }
-        Ok(())
-    }
-
-    fn validate_owner(&self, group: &Group, user_id: &str) -> Result<(), SplitwiseError> {
-        if !group
-            .members
-            .iter()
-            .any(|m| m.user.id == user_id && m.role == Role::Owner)
-        {
-            return Err(SplitwiseError::NotGroupOwner(user_id.to_string()));
-        }
-        Ok(())
-    }
-
-    fn validate_group_roles(&self, group: &Group) -> Result<(), SplitwiseError> {
-        let owner_count = group
-            .members
-            .iter()
-            .filter(|m| m.role == Role::Member)
-            .count();
-        if owner_count != 1 {
-            return Err(SplitwiseError::InvalidOwnerCount(owner_count));
         }
         Ok(())
     }
@@ -814,5 +794,34 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
                 timestamp: Utc::now(),
             })
             .await
+    }
+
+    fn validate_owner(&self, group: &Group, user_id: &str) -> Result<(), SplitwiseError> {
+        if !group
+            .members
+            .iter()
+            .any(|m| m.user.id == user_id && m.role == Role::Owner)
+        {
+            return Err(SplitwiseError::NotGroupOwner(user_id.to_string()));
+        }
+        Ok(())
+    }
+
+    fn validate_group_roles(&self, group: &Group) -> Result<(), SplitwiseError> {
+        let owner_count = group
+            .members
+            .iter()
+            .filter(|m| m.role == Role::Owner)
+            .count();
+
+        if owner_count != 1 {
+            return Err(SplitwiseError::InvalidOwnerCount(owner_count));
+        }
+        Ok(())
+    }
+
+    fn is_valid_split(&self, amount: f64, shares: &HashMap<String, f64>) -> bool {
+        let total: f64 = shares.values().copied().sum();
+        (total - amount).abs() < 0.01
     }
 }

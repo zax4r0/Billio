@@ -44,4 +44,6 @@ pub trait Storage: Send + Sync {
     async fn get_app_logs(&self) -> Result<Vec<AppLog>, SplitwiseError>;
     async fn save_group_audit(&self, audit: GroupAudit) -> Result<(), SplitwiseError>;
     async fn get_group_audits(&self, group_id: &str) -> Result<Vec<GroupAudit>, SplitwiseError>;
+    async fn is_group_member(&self, group_id: &str, user_id: &str) -> Result<bool, SplitwiseError>;
+    async fn get_user_groups(&self, user_id: &str) -> Result<Vec<Group>, SplitwiseError>;
 }

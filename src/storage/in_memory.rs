@@ -213,4 +213,25 @@ impl Storage for InMemoryStorage {
             .cloned()
             .unwrap_or_default())
     }
+
+    async fn is_group_member(&self, group_id: &str, user_id: &str) -> Result<bool, SplitwiseError> {
+        let groups = self.groups.lock().await;
+        if let Some(group) = groups.get(group_id) {
+            Ok(group.members.iter().any(|m| m.user.id == user_id))
+        } else {
+            Err(SplitwiseError::GroupNotFound(group_id.to_string()))
+        }
+    }
+
+    async fn get_user_groups(&self, user_id: &str) -> Result<Vec<Group>, SplitwiseError> {
+        // For production: Use database query with index
+        Ok(self
+            .groups
+            .lock()
+            .await
+            .values()
+            .filter(|g| g.members.iter().any(|m| m.user.id == user_id))
+            .cloned()
+            .collect())
+    }
 }
