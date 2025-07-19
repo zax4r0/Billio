@@ -2,11 +2,12 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
-			"name": "Axum Dev Server (Task)",
-			"type": "node",
+			"name": "Axum Dev Server (LLDB)",
+			"type": "lldb",
 			"request": "launch",
-			"runtimeExecutable": "echo",
-			"args": ["Axum server is running via cargo-watch task..."],
+			"program": "${workspaceFolder}/target/debug/acme",
+			"args": [],
+			"cwd": "${workspaceFolder}",
 			"preLaunchTask": "watch-axum",
 			"console": "integratedTerminal"
 		}

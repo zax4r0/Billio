@@ -5,7 +5,7 @@
 			"label": "watch-axum",
 			"type": "shell",
 			"command": "cargo watch -x run",
-			"problemMatcher": [],
+			"problemMatcher": ["$rustc-watch"],
 			"isBackground": true,
 			"group": {
 				"kind": "build",
