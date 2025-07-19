@@ -1,7 +1,16 @@
-use crate::models::AuditLogEntry;
-
-pub trait AuditLogger {
-    fn log(&mut self, entry: AuditLogEntry);
-}
-
 pub mod in_memory;
+
+use crate::error::SplitwiseError;
+use crate::models::audit::AppLog;
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait LoggingService: Send + Sync {
+    async fn log_action(
+        &self,
+        action: &str,
+        details: serde_json::Value,
+        user_id: Option<&str>,
+    ) -> Result<(), SplitwiseError>;
+    async fn get_logs(&self) -> Result<Vec<AppLog>, SplitwiseError>;
+}

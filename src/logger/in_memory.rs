@@ -1,26 +1,43 @@
-use crate::models::AuditLogEntry;
-use log::info;
+use crate::error::SplitwiseError;
+use crate::logger::LoggingService;
+use crate::models::audit::AppLog;
+use async_trait::async_trait;
+use chrono::Utc;
+use uuid::Uuid;
 
-#[derive(Clone)]
-pub struct InMemoryAuditLogger {
-    logs: Vec<AuditLogEntry>,
+pub struct InMemoryLogging {
+    logs: tokio::sync::Mutex<Vec<AppLog>>,
 }
 
-impl InMemoryAuditLogger {
+impl InMemoryLogging {
     pub fn new() -> Self {
-        info!("Initializing InMemoryAuditLogger");
-        InMemoryAuditLogger { logs: Vec::new() }
-    }
-
-    // Expose logs for testing purposes by returning a cloned copy
-    pub fn get_logs(&self) -> Vec<AuditLogEntry> {
-        self.logs.clone() // Clone the logs to avoid borrow conflicts
+        InMemoryLogging {
+            logs: tokio::sync::Mutex::new(Vec::new()),
+        }
     }
 }
 
-impl super::AuditLogger for InMemoryAuditLogger {
-    fn log(&mut self, entry: AuditLogEntry) {
-        info!("Logging audit entry: {:?}", entry.action);
-        self.logs.push(entry);
+#[async_trait]
+impl LoggingService for InMemoryLogging {
+    async fn log_action(
+        &self,
+        action: &str,
+        details: serde_json::Value,
+        user_id: Option<&str>,
+    ) -> Result<(), SplitwiseError> {
+        // For production: Use a logging queue or batch writes
+        let mut logs = self.logs.lock().await;
+        logs.push(AppLog {
+            id: Uuid::new_v4().to_string(),
+            action: action.to_string(),
+            user_id: user_id.map(String::from),
+            details: serde_json::from_value(details).unwrap_or_default(),
+            timestamp: Utc::now(),
+        });
+        Ok(())
+    }
+
+    async fn get_logs(&self) -> Result<Vec<AppLog>, SplitwiseError> {
+        Ok(self.logs.lock().await.clone())
     }
 }
