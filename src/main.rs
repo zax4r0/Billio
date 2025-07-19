@@ -6,15 +6,18 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use splitwise::models::{
-    audit::{AppLog, GroupAudit},
-    group::Group,
-    settlement::Settlement,
-    transaction::Transaction,
-    user::User,
-};
 use splitwise::service::SplitwiseService;
 use splitwise::storage::in_memory::InMemoryStorage;
+use splitwise::{
+    cache::in_memory_cache::InMemoryCache,
+    models::{
+        audit::{AppLog, GroupAudit},
+        group::Group,
+        settlement::Settlement,
+        transaction::Transaction,
+        user::User,
+    },
+};
 use splitwise::{config::CONFIG, error::SplitwiseError};
 use splitwise::{logger::in_memory::InMemoryLogging, service::UserBalancesResponse};
 use std::collections::HashMap;
@@ -231,13 +234,14 @@ impl IntoResponse for ApiError {
             SplitwiseError::UnexpectedError(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Unexpected error: {}", msg))
             }
+            SplitwiseError::CacheError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Cache error: {}", msg)),
         };
         (status, Json(ErrorResponse { error: error_message })).into_response()
     }
 }
 
 async fn create_user(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<StatusCode, ApiError> {
     let user = User {
@@ -260,7 +264,7 @@ async fn create_user(
 }
 
 async fn get_user(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(user_id): Path<String>,
 ) -> Result<Json<User>, ApiError> {
     let user = service
@@ -271,7 +275,7 @@ async fn get_user(
 }
 
 async fn create_group(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<CreateGroupRequest>,
 ) -> Result<Json<Group>, ApiError> {
     let created_by = service
@@ -294,7 +298,7 @@ async fn create_group(
 }
 
 async fn delete_group(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<DeleteGroupRequest>,
 ) -> Result<StatusCode, ApiError> {
@@ -307,7 +311,7 @@ async fn delete_group(
 }
 
 async fn join_group_by_link(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<JoinGroupRequest>,
 ) -> Result<StatusCode, ApiError> {
     let user = service
@@ -319,7 +323,7 @@ async fn join_group_by_link(
 }
 
 async fn add_member_to_group(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<AddMemberRequest>,
 ) -> Result<StatusCode, ApiError> {
@@ -336,7 +340,7 @@ async fn add_member_to_group(
 }
 
 async fn add_member_by_email(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<AddMemberByEmailRequest>,
 ) -> Result<StatusCode, ApiError> {
@@ -349,7 +353,7 @@ async fn add_member_by_email(
 }
 
 async fn remove_member_from_group(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<RemoveMemberRequest>,
 ) -> Result<StatusCode, ApiError> {
@@ -364,7 +368,7 @@ async fn remove_member_from_group(
 }
 
 async fn revoke_join_link(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<RevokeJoinLinkRequest>,
 ) -> Result<StatusCode, ApiError> {
@@ -377,7 +381,7 @@ async fn revoke_join_link(
 }
 
 async fn regenerate_join_link(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<RegenerateJoinLinkRequest>,
 ) -> Result<Json<String>, ApiError> {
@@ -390,7 +394,7 @@ async fn regenerate_join_link(
 }
 
 async fn toggle_strict_settlement_mode(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<ToggleStrictModeRequest>,
 ) -> Result<StatusCode, ApiError> {
@@ -405,7 +409,7 @@ async fn toggle_strict_settlement_mode(
 }
 
 async fn transfer_ownership(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<TransferOwnershipRequest>,
 ) -> Result<StatusCode, ApiError> {
@@ -424,7 +428,7 @@ async fn transfer_ownership(
 }
 
 async fn add_expense(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<AddExpenseRequest>,
 ) -> Result<Json<Transaction>, ApiError> {
     let paid_by = service
@@ -449,7 +453,7 @@ async fn add_expense(
 }
 
 async fn reverse_transaction(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<ReverseTransactionRequest>,
 ) -> Result<Json<Transaction>, ApiError> {
     let reversed_by = service
@@ -461,7 +465,7 @@ async fn reverse_transaction(
 }
 
 async fn create_settlement(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<CreateSettlementRequest>,
 ) -> Result<Json<Settlement>, ApiError> {
     let from_user = service
@@ -491,7 +495,7 @@ async fn create_settlement(
 }
 
 async fn confirm_settlement(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<ConfirmSettlementRequest>,
 ) -> Result<StatusCode, ApiError> {
     let confirmed_by = service
@@ -503,7 +507,7 @@ async fn confirm_settlement(
 }
 
 async fn get_pending_settlements(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<GetPendingSettlementsRequest>,
 ) -> Result<Json<Vec<Settlement>>, ApiError> {
     let user = service
@@ -515,7 +519,7 @@ async fn get_pending_settlements(
 }
 
 async fn get_user_balances(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<GetUserBalancesRequest>,
 ) -> Result<Json<UserBalancesResponse>, ApiError> {
     let queried_by = service
@@ -527,7 +531,7 @@ async fn get_user_balances(
 }
 
 async fn get_effective_transactions(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<GetEffectiveTransactionsRequest>,
 ) -> Result<Json<Vec<Transaction>>, ApiError> {
     let queried_by = service
@@ -539,14 +543,14 @@ async fn get_effective_transactions(
 }
 
 async fn get_app_logs(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
 ) -> Result<Json<Vec<AppLog>>, ApiError> {
     let logs = service.get_app_logs().await?;
     Ok(Json(logs))
 }
 
 async fn get_group_audits(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
 ) -> Result<Json<Vec<GroupAudit>>, ApiError> {
     let audits = service.get_group_audits(&group_id).await?;
@@ -559,9 +563,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     // Initialize storage and logging
+    let cache = InMemoryCache::new();
     let storage = InMemoryStorage::new();
     let logging = InMemoryLogging::new();
-    let splitwise = Arc::new(SplitwiseService::new(storage, logging));
+    let splitwise = Arc::new(SplitwiseService::new(storage, logging, cache));
 
     // Define API routes
     let app = Router::new()

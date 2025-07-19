@@ -2,11 +2,20 @@ use dotenv::dotenv;
 use once_cell::sync::Lazy;
 use std::env;
 
-#[derive(Debug)]
 pub struct Config {
     pub port: u16,
     pub database_url: String,
     pub log_level: String,
+}
+
+impl core::fmt::Debug for Config {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Config")
+            .field("port", &self.port)
+            .field("database_url", &"<redacted>")
+            .field("log_level", &self.log_level)
+            .finish()
+    }
 }
 
 impl Config {

@@ -1,3 +1,4 @@
+use crate::cache::in_memory_cache::Cache;
 use crate::constants::*;
 use crate::error::{FieldError, SplitwiseError};
 use crate::logger::LoggingService;
@@ -11,12 +12,12 @@ use crate::models::{
 };
 use crate::storage::Storage;
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct UserBalancesResponse {
     circular_balances: Vec<Balance>,
     minimized_balances: Vec<Balance>,
@@ -32,14 +33,19 @@ impl UserBalancesResponse {
     }
 }
 
-pub struct SplitwiseService<L: LoggingService, S: Storage> {
+pub struct SplitwiseService<L: LoggingService, S: Storage, C: Cache> {
     storage: S,
     logging: L,
+    cache: C,
 }
 
-impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
-    pub fn new(storage: S, logging: L) -> Self {
-        SplitwiseService { storage, logging }
+impl<L: LoggingService, S: Storage, C: Cache> SplitwiseService<L, S, C> {
+    pub fn new(storage: S, logging: L, cache: C) -> Self {
+        SplitwiseService {
+            storage,
+            logging,
+            cache,
+        }
     }
 
     // Helper: Validate multiple users exist
@@ -129,7 +135,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             ));
         }
         // Sanitize: reject control characters or potentially harmful characters
-        if value.chars().any(|c| c.is_control() || "<>{}\\[\\]".contains(c)) {
+        if value.chars().any(|c| c.is_control() || "<>{}[]".contains(c)) {
             return Err(SplitwiseError::InvalidInput(
                 field.to_string(),
                 FieldError {
@@ -559,6 +565,14 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
 
         self.storage.save_transaction(transaction.clone()).await?;
 
+        // Invalidate cache for affected users (uses USER_BALANCES_KEY format)
+        for user_id in transaction.shares.keys() {
+            let cache_key = format!("balances:{}", user_id);
+            self.cache.del(&cache_key).await?;
+        }
+        let cache_key = format!("balances:{}", transaction.paid_by.id);
+        self.cache.del(&cache_key).await?;
+
         self.log_and_audit(
             Some(group_id),
             EXPENSE_ADDED,
@@ -628,6 +642,14 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         self.storage.save_transaction(updated_original).await?;
         self.storage.save_transaction(reversal.clone()).await?;
 
+        // Invalidate cache for affected users (uses USER_BALANCES_KEY format)
+        for user_id in reversal.shares.keys() {
+            let cache_key = format!("balances:{}", user_id);
+            self.cache.del(&cache_key).await?;
+        }
+        let cache_key = format!("balances:{}", reversal.paid_by.id);
+        self.cache.del(&cache_key).await?;
+
         self.log_and_audit(
             Some(&original_group_id),
             TRANSACTION_REVERSED,
@@ -694,6 +716,12 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
 
         self.storage.save_settlement(settlement.clone()).await?;
 
+        // Invalidate cache for affected users (uses USER_BALANCES_KEY format)
+        let cache_key_from = format!("balances:{}", from_user.id);
+        let cache_key_to = format!("balances:{}", to_user.id);
+        self.cache.del(&cache_key_from).await?;
+        self.cache.del(&cache_key_to).await?;
+
         self.log_and_audit(
             Some(group_id),
             SETTLEMENT_CREATED,
@@ -735,6 +763,12 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         settlement.confirmed_by = Some(confirmed_by.id.clone());
         self.storage.save_settlement(settlement.clone()).await?;
 
+        // Invalidate cache for affected users (uses USER_BALANCES_KEY format)
+        let cache_key_from = format!("balances:{}", settlement.from_user_id);
+        let cache_key_to = format!("balances:{}", settlement.to_user_id);
+        self.cache.del(&cache_key_from).await?;
+        self.cache.del(&cache_key_to).await?;
+
         self.log_and_audit(
             Some(&settlement.group_id),
             SETTLEMENT_CONFIRMED,
@@ -768,13 +802,11 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         user_id: &str,
         queried_by: &User,
     ) -> Result<UserBalancesResponse, SplitwiseError> {
-        // For production: Cache results
-        /*
+        // Check cache first (uses USER_BALANCES_KEY format)
         let cache_key = format!("balances:{}", user_id);
-        if let Some(cached) = self.redis.get(&cache_key).await? {
+        if let Some(cached) = self.cache.get::<UserBalancesResponse>(&cache_key).await? {
             return Ok(cached);
         }
-        */
 
         self.validate_users(&[user_id, &queried_by.id]).await?;
 
@@ -814,25 +846,24 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
 
         // Convert to Balance objects, filtering negligible amounts
         let circular_balances = balances
-            .iter()
+            .into_iter()
             .filter(|(_, amount)| amount.abs() >= 0.01)
             .map(|(owes_to, amount)| Balance {
                 user_id: user_id.to_string(),
                 owes_to: owes_to.clone(),
-                amount: *amount,
+                amount,
             })
             .collect::<Vec<Balance>>();
 
         // Minimize debts
         let minimized_balances = self.minimize_debts_for_user(user_id, &circular_balances);
 
-        // Cache results for future queries
-        /*
-        self.redis.set(&cache_key, &UserBalancesResponse {
+        // Cache results for future queries (uses USER_BALANCES_KEY format)
+        let response = UserBalancesResponse {
             circular_balances: circular_balances.clone(),
             minimized_balances: minimized_balances.clone(),
-        }, 3600).await?;
-        */
+        };
+        self.cache.set(&cache_key, &response, Some(3600)).await?;
 
         self.log_and_audit(
             None,
@@ -846,10 +877,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         )
         .await?;
 
-        Ok(UserBalancesResponse {
-            circular_balances,
-            minimized_balances,
-        })
+        Ok(response)
     }
 
     fn minimize_debts_for_user(&self, user_id: &str, balances: &[Balance]) -> Vec<Balance> {
@@ -864,14 +892,19 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
                     if i == j {
                         continue;
                     }
-                    // Check for circular debt: user_id owes A, and A owes user_id
-                    if result[i].owes_to != user_id && result[j].user_id == user_id && result[j].owes_to == user_id {
+                    // Corrected circular debt detection:
+                    // user_id owes A (i), and A owes user_id (j)
+                    if result[i].user_id == user_id
+                        && result[i].owes_to != user_id
+                        && result[j].user_id == result[i].owes_to
+                        && result[j].owes_to == user_id
+                    {
                         let amount_i = result[i].amount;
                         let amount_j = result[j].amount;
-                        if amount_i > 0.01 && amount_j < -0.01 {
-                            let reduction = amount_i.min(amount_j.abs());
+                        if amount_i > 0.01 && amount_j > 0.01 {
+                            let reduction = amount_i.min(amount_j);
                             result[i].amount -= reduction;
-                            result[j].amount += reduction;
+                            result[j].amount -= reduction;
                             modified = true;
                         }
                     }

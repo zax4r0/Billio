@@ -1,3 +1,4 @@
+use crate::cache::in_memory_cache::InMemoryCache;
 use crate::error::SplitwiseError;
 use crate::logger::in_memory::InMemoryLogging;
 use crate::models::user::User;
@@ -6,9 +7,11 @@ use crate::storage::in_memory::InMemoryStorage;
 
 #[tokio::test]
 async fn test_add_user() {
+    let cache = InMemoryCache::new();
     let storage = InMemoryStorage::new();
     let logging = InMemoryLogging::new();
-    let splitwise = SplitwiseService::new(storage, logging);
+    let splitwise = SplitwiseService::new(storage, logging, cache);
+
     let user = User {
         id: "u1".to_string(),
         name: "Alice".to_string(),
@@ -23,9 +26,11 @@ async fn test_add_user() {
 
 #[tokio::test]
 async fn test_duplicate_email() {
+    let cache = InMemoryCache::new();
     let storage = InMemoryStorage::new();
     let logging = InMemoryLogging::new();
-    let splitwise = SplitwiseService::new(storage, logging);
+    let splitwise = SplitwiseService::new(storage, logging, cache);
+
     let user1 = User {
         id: "u1".to_string(),
         name: "Alice".to_string(),

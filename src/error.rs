@@ -102,22 +102,27 @@ pub enum SplitwiseError {
     #[error("Unexpected error: {0}")]
     UnexpectedError(String),
 
-    // invalid split user
+    /// User specified in split is invalid
     #[error("Invalid split user: {0}")]
     InvalidSplitUser(String),
-    // invalid join link
+
+    /// Join link is invalid or malformed
     #[error("Invalid join link")]
     InvalidJoinLink,
 
-    #[error("Invalid split amounts")]
+    /// Settlement amount is invalid or doesn't match transaction
+    #[error("Invalid settlement amount")]
     InvalidSettlementAmount,
 
+    /// Split amounts don't add up correctly
     #[error("Invalid split amounts")]
     InvalidSplit,
-
     #[error("Storage error: {0}")]
     StorageError(String),
 
     #[error("Logging error: {0}")]
     LoggingError(String),
+
+    #[error("Cache error: {0}")]
+    CacheError(String),
 }

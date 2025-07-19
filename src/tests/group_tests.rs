@@ -1,3 +1,4 @@
+use crate::cache::in_memory_cache::InMemoryCache;
 use crate::logger::in_memory::InMemoryLogging;
 use crate::models::group::Role;
 use crate::models::user::User;
@@ -5,9 +6,11 @@ use crate::service::SplitwiseService;
 use crate::storage::in_memory::InMemoryStorage;
 #[tokio::test]
 async fn test_create_group() {
+    let cache = InMemoryCache::new();
     let storage = InMemoryStorage::new();
     let logging = InMemoryLogging::new();
-    let splitwise = SplitwiseService::new(storage, logging);
+    let splitwise = SplitwiseService::new(storage, logging, cache);
+
     let user = User {
         id: "u1".to_string(),
         name: "Alice".to_string(),

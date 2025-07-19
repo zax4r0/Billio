@@ -1,5 +1,6 @@
 // src/tests/transaction_tests.rs
 
+use crate::cache::in_memory_cache::InMemoryCache;
 use crate::logger::in_memory::InMemoryLogging;
 use crate::models::user::User;
 use crate::service::SplitwiseService;
@@ -8,9 +9,11 @@ use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_add_expense_and_settlement() {
+    // Initialize storage and logging
+    let cache = InMemoryCache::new();
     let storage = InMemoryStorage::new();
     let logging = InMemoryLogging::new();
-    let splitwise = SplitwiseService::new(storage, logging);
+    let splitwise = SplitwiseService::new(storage, logging, cache);
 
     let user1 = User {
         id: "u1".to_string(),
