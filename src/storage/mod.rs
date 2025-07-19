@@ -1,40 +1,47 @@
-use uuid::Uuid;
-
-use crate::error::ExpenseServiceError;
-use crate::models::*;
-
-pub trait Storage {
-    fn create_user(&mut self, user: User) -> Result<User, ExpenseServiceError>;
-    fn update_user(&mut self, user: User) -> Result<User, ExpenseServiceError>;
-    fn get_user(&self, user_id: Uuid) -> Option<User>;
-
-    fn list_groups(&self) -> Vec<Group>;
-    fn create_group(&mut self, group: Group) -> Result<Group, ExpenseServiceError>;
-    fn update_group(&mut self, group: Group) -> Result<Group, ExpenseServiceError>;
-    fn get_group(&self, group_id: Uuid) -> Option<Group>;
-    fn is_group_member(&self, group_id: Uuid, user_id: Uuid) -> bool;
-
-    fn add_user_to_group(&mut self, group_user: GroupUser) -> Result<(), ExpenseServiceError>;
-    fn update_group_user_role(
-        &mut self,
-        group_id: Uuid,
-        user_id: Uuid,
-        role: Role,
-    ) -> Result<(), ExpenseServiceError>;
-    fn remove_user_from_group(
-        &mut self,
-        group_id: Uuid,
-        user_id: Uuid,
-    ) -> Result<(), ExpenseServiceError>;
-    fn get_group_user_role(&self, group_id: Uuid, user_id: Uuid) -> Option<Role>;
-    fn list_group_users(&self, group_id: Uuid) -> Vec<GroupUser>;
-
-    fn create_transaction(&mut self, tx: Transaction) -> Result<Transaction, ExpenseServiceError>;
-    fn update_transaction(&mut self, tx: Transaction) -> Result<Transaction, ExpenseServiceError>;
-    fn get_transaction(&self, tx_id: Uuid) -> Option<Transaction>;
-    fn list_transactions(&self, group_id: Uuid) -> Vec<Transaction>;
-
-    fn list_audit_logs(&self) -> Vec<AuditLogEntry>;
-}
-
 pub mod in_memory;
+
+use crate::error::SplitwiseError;
+use crate::models::{
+    audit::{AppLog, GroupAudit},
+    group::Group,
+    settlement::Settlement,
+    transaction::Transaction,
+    transaction_split::Balance,
+    user::User,
+};
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait Storage: Send + Sync {
+    async fn save_user(&self, user: User) -> Result<(), SplitwiseError>;
+    async fn get_user(&self, id: &str) -> Result<Option<User>, SplitwiseError>;
+    async fn get_user_by_email(&self, email: &str) -> Result<Option<User>, SplitwiseError>;
+    async fn save_group(&self, group: Group) -> Result<(), SplitwiseError>;
+    async fn get_group(&self, id: &str) -> Result<Option<Group>, SplitwiseError>;
+    async fn get_group_by_join_link(&self, link: &str) -> Result<Option<Group>, SplitwiseError>;
+    async fn revoke_join_link(&self, link: &str) -> Result<(), SplitwiseError>;
+    async fn save_transaction(&self, transaction: Transaction) -> Result<(), SplitwiseError>;
+    async fn get_transaction(&self, id: &str) -> Result<Option<Transaction>, SplitwiseError>;
+    async fn get_transactions_by_group(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<Transaction>, SplitwiseError>;
+    async fn save_balance(
+        &self,
+        user_id: &str,
+        owes_to: &str,
+        amount: f64,
+    ) -> Result<(), SplitwiseError>;
+    async fn get_balances(&self, user_id: &str) -> Result<Vec<Balance>, SplitwiseError>;
+    async fn save_settlement(&self, settlement: Settlement) -> Result<(), SplitwiseError>;
+    async fn get_settlement(&self, id: &str) -> Result<Option<Settlement>, SplitwiseError>;
+    async fn get_pending_settlements(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<Vec<Settlement>, SplitwiseError>;
+    async fn save_app_log(&self, log: AppLog) -> Result<(), SplitwiseError>;
+    async fn get_app_logs(&self) -> Result<Vec<AppLog>, SplitwiseError>;
+    async fn save_group_audit(&self, audit: GroupAudit) -> Result<(), SplitwiseError>;
+    async fn get_group_audits(&self, group_id: &str) -> Result<Vec<GroupAudit>, SplitwiseError>;
+}

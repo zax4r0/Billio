@@ -1,277 +1,216 @@
-use crate::models::*;
-use crate::{error::ExpenseServiceError, storage::Storage};
-use log::{debug, info, warn};
-use std::collections::{BTreeMap, HashMap};
-use uuid::Uuid;
+use crate::error::SplitwiseError;
+use crate::models::{
+    audit::{AppLog, GroupAudit},
+    group::Group,
+    settlement::Settlement,
+    transaction::Transaction,
+    transaction_split::Balance,
+    user::User,
+};
+use crate::storage::Storage;
+use async_trait::async_trait;
+use std::collections::HashMap;
+use tokio::sync::Mutex;
 
-#[derive(Clone)]
 pub struct InMemoryStorage {
-    users: HashMap<Uuid, User>,
-    groups: BTreeMap<Uuid, Group>,
-    transactions: Vec<Transaction>,
+    users: Mutex<HashMap<String, User>>,
+    emails: Mutex<HashMap<String, String>>, // email -> user_id
+    groups: Mutex<HashMap<String, Group>>,
+    join_links: Mutex<HashMap<String, String>>, // link -> group_id
+    transactions: Mutex<HashMap<String, Transaction>>,
+    balances: Mutex<HashMap<String, HashMap<String, f64>>>, // user_id -> (owes_to -> amount)
+    settlements: Mutex<HashMap<String, Settlement>>,
+    app_logs: Mutex<Vec<AppLog>>,
+    group_audits: Mutex<HashMap<String, Vec<GroupAudit>>>,
 }
 
 impl InMemoryStorage {
     pub fn new() -> Self {
-        info!("Initializing InMemoryStorage");
         InMemoryStorage {
-            users: HashMap::new(),
-            groups: BTreeMap::new(),
-            transactions: Vec::new(),
+            users: Mutex::new(HashMap::new()),
+            emails: Mutex::new(HashMap::new()),
+            groups: Mutex::new(HashMap::new()),
+            join_links: Mutex::new(HashMap::new()),
+            transactions: Mutex::new(HashMap::new()),
+            balances: Mutex::new(HashMap::new()),
+            settlements: Mutex::new(HashMap::new()),
+            app_logs: Mutex::new(Vec::new()),
+            group_audits: Mutex::new(HashMap::new()),
         }
     }
 }
 
+#[async_trait]
 impl Storage for InMemoryStorage {
-    fn add_user_to_group(&mut self, group_user: GroupUser) -> Result<(), ExpenseServiceError> {
-        info!(
-            "Adding user {} to group {}",
-            group_user.user_id, group_user.group_id
-        );
-        let group = self.groups.get_mut(&group_user.group_id).ok_or_else(|| {
-            warn!("Group {} not found", group_user.group_id);
-            ExpenseServiceError::GroupNotFound
-        })?;
-
-        if group
-            .users
-            .iter()
-            .any(|gu| gu.user_id == group_user.user_id)
-        {
-            warn!(
-                "User {} already in group {}",
-                group_user.user_id, group_user.group_id
-            );
-            return Err(ExpenseServiceError::UserAlreadyInGroup);
+    async fn save_user(&self, user: User) -> Result<(), SplitwiseError> {
+        let mut emails = self.emails.lock().await;
+        if emails.contains_key(&user.email) {
+            return Err(SplitwiseError::EmailAlreadyRegistered(user.email));
         }
-
-        debug!(
-            "User {} added to group {}",
-            group_user.user_id, group_user.group_id
-        );
-        group.users.push(group_user);
+        emails.insert(user.email.clone(), user.id.clone());
+        let mut users = self.users.lock().await;
+        users.insert(user.id.clone(), user);
         Ok(())
     }
 
-    fn create_group(&mut self, group: Group) -> Result<Group, ExpenseServiceError> {
-        info!("Creating group with ID: {}", group.id);
-        if self.groups.contains_key(&group.id) {
-            warn!("Group {} already exists", group.id);
-            return Err(ExpenseServiceError::GroupAlreadyExists);
-        }
-        self.groups.insert(group.id, group.clone());
-        debug!("Group created: {:?}", group);
-        Ok(group)
+    async fn get_user(&self, id: &str) -> Result<Option<User>, SplitwiseError> {
+        Ok(self.users.lock().await.get(id).cloned())
     }
 
-    fn create_transaction(&mut self, tx: Transaction) -> Result<Transaction, ExpenseServiceError> {
-        info!("Creating transaction with ID: {}", tx.id);
-        if self.transactions.iter().any(|t| t.id == tx.id) {
-            warn!("Transaction {} already exists", tx.id);
-            return Err(ExpenseServiceError::TransactionAlreadyExists);
-        }
-        self.transactions.push(tx.clone());
-        debug!("Transaction created: {:?}", tx);
-        Ok(tx)
+    async fn get_user_by_email(&self, email: &str) -> Result<Option<User>, SplitwiseError> {
+        // For production: Use database index on email
+        let user_id = self.emails.lock().await.get(email).cloned();
+        Ok(match user_id {
+            Some(id) => self.users.lock().await.get(&id).cloned(),
+            None => None,
+        })
     }
 
-    fn create_user(&mut self, user: User) -> Result<User, ExpenseServiceError> {
-        info!("Creating user with ID: {}", user.id);
-        if self.users.contains_key(&user.id) {
-            warn!("User {} already exists", user.id);
-            return Err(ExpenseServiceError::UserAlreadyExists);
-        }
-        if self.users.values().any(|u| u.email == user.email) {
-            warn!("Email {} already in use", user.email);
-            return Err(ExpenseServiceError::EmailInUse);
-        }
-        self.users.insert(user.id, user.clone());
-        debug!("User created: {:?}", user);
-        Ok(user)
+    async fn save_group(&self, group: Group) -> Result<(), SplitwiseError> {
+        // For production: Use database transactions
+        let mut groups = self.groups.lock().await;
+        let mut join_links = self.join_links.lock().await;
+        join_links.insert(group.join_link.clone(), group.id.clone());
+        groups.insert(group.id.clone(), group);
+        Ok(())
     }
 
-    fn get_group(&self, group_id: Uuid) -> Option<Group> {
-        debug!("Fetching group {}", group_id);
-        let group = self.groups.get(&group_id).cloned();
-        if group.is_none() {
-            warn!("Group {} not found", group_id);
-        }
-        group
+    async fn get_group(&self, id: &str) -> Result<Option<Group>, SplitwiseError> {
+        // For production: Add caching
+        Ok(self.groups.lock().await.get(id).cloned())
     }
 
-    fn get_group_user_role(&self, group_id: Uuid, user_id: Uuid) -> Option<Role> {
-        debug!("Fetching role for user {} in group {}", user_id, group_id);
-        let group = self.groups.get(&group_id)?;
-        let role = group
-            .users
-            .iter()
-            .find(|&gu| gu.user_id == user_id)
-            .map(|gu| gu.role.clone());
-        debug!(
-            "Role for user {} in group {}: {:?}",
-            user_id, group_id, role
-        );
-        role
+    async fn get_group_by_join_link(&self, link: &str) -> Result<Option<Group>, SplitwiseError> {
+        // For production: Use database index on join_link
+        let group_id = self.join_links.lock().await.get(link).cloned();
+        Ok(match group_id {
+            Some(id) => self.groups.lock().await.get(&id).cloned(),
+            None => None,
+        })
     }
 
-    fn get_transaction(&self, tx_id: Uuid) -> Option<Transaction> {
-        debug!("Fetching transaction {}", tx_id);
-        let tx = self.transactions.iter().find(|&tx| tx.id == tx_id).cloned();
-        if tx.is_none() {
-            warn!("Transaction {} not found", tx_id);
-        }
-        tx
+    async fn revoke_join_link(&self, link: &str) -> Result<(), SplitwiseError> {
+        // For production: Ensure atomic revocation
+        self.join_links.lock().await.remove(link);
+        Ok(())
     }
 
-    fn get_user(&self, user_id: Uuid) -> Option<User> {
-        debug!("Fetching user {}", user_id);
-        let user = self.users.get(&user_id).cloned();
-        if user.is_none() {
-            warn!("User {} not found", user_id);
-        }
-        user
+    async fn save_transaction(&self, transaction: Transaction) -> Result<(), SplitwiseError> {
+        self.transactions
+            .lock()
+            .await
+            .insert(transaction.id.clone(), transaction);
+        Ok(())
     }
 
-    fn list_audit_logs(&self) -> Vec<AuditLogEntry> {
-        debug!("Listing audit logs (not supported in InMemoryStorage)");
-        vec![] // In-memory storage does not support audit logs
+    async fn get_transaction(&self, id: &str) -> Result<Option<Transaction>, SplitwiseError> {
+        Ok(self.transactions.lock().await.get(id).cloned())
     }
 
-    fn list_groups(&self) -> Vec<Group> {
-        debug!("Listing all groups");
-        let groups: Vec<Group> = self.groups.values().cloned().collect();
-        debug!("Found {} groups", groups.len());
-        groups
-    }
-
-    fn list_transactions(&self, group_id: Uuid) -> Vec<Transaction> {
-        debug!("Listing transactions for group {}", group_id);
-        let transactions: Vec<Transaction> = self
+    async fn get_transactions_by_group(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<Transaction>, SplitwiseError> {
+        // For production: Use database query with index
+        Ok(self
             .transactions
-            .iter()
-            .filter(|&tx| tx.group_id == group_id)
+            .lock()
+            .await
+            .values()
+            .filter(|tx| tx.group_id == group_id)
             .cloned()
-            .collect();
-        debug!(
-            "Found {} transactions for group {}",
-            transactions.len(),
-            group_id
-        );
-        transactions
+            .collect())
     }
 
-    fn list_group_users(&self, group_id: Uuid) -> Vec<GroupUser> {
-        debug!("Listing users for group {}", group_id);
-        let users = self
-            .groups
-            .get(&group_id)
-            .map_or(vec![], |group| group.users.iter().cloned().collect());
-        debug!("Found {} users in group {}", users.len(), group_id);
-        users
+    async fn save_balance(
+        &self,
+        user_id: &str,
+        owes_to: &str,
+        amount: f64,
+    ) -> Result<(), SplitwiseError> {
+        let mut balances = self.balances.lock().await;
+        let user_balances = balances
+            .entry(user_id.to_string())
+            .or_insert_with(HashMap::new);
+        let current = user_balances.get(owes_to).copied().unwrap_or(0.0);
+        user_balances.insert(owes_to.to_string(), current + amount);
+        Ok(())
     }
 
-    fn remove_user_from_group(
-        &mut self,
-        group_id: Uuid,
-        user_id: Uuid,
-    ) -> Result<(), ExpenseServiceError> {
-        info!("Removing user {} from group {}", user_id, group_id);
-        let group = self.groups.get_mut(&group_id).ok_or_else(|| {
-            warn!("Group {} not found", group_id);
-            ExpenseServiceError::GroupNotFound
-        })?;
-
-        if let Some(pos) = group.users.iter().position(|gu| gu.user_id == user_id) {
-            group.users.remove(pos);
-            debug!("User {} removed from group {}", user_id, group_id);
-            Ok(())
-        } else {
-            warn!("User {} not found in group {}", user_id, group_id);
-            Err(ExpenseServiceError::NotGroupMember)
-        }
+    async fn get_balances(&self, user_id: &str) -> Result<Vec<Balance>, SplitwiseError> {
+        Ok(self
+            .balances
+            .lock()
+            .await
+            .get(user_id)
+            .map(|b| {
+                b.iter()
+                    .map(|(owes_to, amount)| Balance {
+                        user_id: user_id.to_string(),
+                        owes_to: owes_to.to_string(),
+                        amount: *amount,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
-    fn update_group(&mut self, group: Group) -> Result<Group, ExpenseServiceError> {
-        info!("Updating group {}", group.id);
-        if self.groups.contains_key(&group.id) {
-            self.groups.insert(group.id, group.clone());
-            debug!("Group updated: {:?}", group);
-            Ok(group)
-        } else {
-            warn!("Group {} not found", group.id);
-            Err(ExpenseServiceError::GroupNotFound)
-        }
+    async fn save_settlement(&self, settlement: Settlement) -> Result<(), SplitwiseError> {
+        // For production: Use database transactions
+        self.settlements
+            .lock()
+            .await
+            .insert(settlement.id.clone(), settlement);
+        Ok(())
     }
 
-    fn update_group_user_role(
-        &mut self,
-        group_id: Uuid,
-        user_id: Uuid,
-        role: Role,
-    ) -> Result<(), ExpenseServiceError> {
-        info!(
-            "Updating role for user {} in group {} to {:?}",
-            user_id, group_id, role
-        );
-        let group = self.groups.get_mut(&group_id).ok_or_else(|| {
-            warn!("Group {} not found", group_id);
-            ExpenseServiceError::GroupNotFound
-        })?;
-
-        if let Some(gu) = group.users.iter_mut().find(|gu| gu.user_id == user_id) {
-            gu.role = role;
-            debug!("Role updated for user {} in group {}", user_id, group_id);
-            Ok(())
-        } else {
-            warn!("User {} not found in group {}", user_id, group_id);
-            Err(ExpenseServiceError::NotGroupMember)
-        }
+    async fn get_settlement(&self, id: &str) -> Result<Option<Settlement>, SplitwiseError> {
+        Ok(self.settlements.lock().await.get(id).cloned())
     }
 
-    fn update_transaction(&mut self, tx: Transaction) -> Result<Transaction, ExpenseServiceError> {
-        info!("Updating transaction {}", tx.id);
-        if let Some(existing_tx) = self.transactions.iter_mut().find(|t| t.id == tx.id) {
-            *existing_tx = tx.clone();
-            debug!("Transaction updated: {:?}", tx);
-            Ok(tx)
-        } else {
-            warn!("Transaction {} not found", tx.id);
-            Err(ExpenseServiceError::TransactionNotFound)
-        }
+    async fn get_pending_settlements(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<Vec<Settlement>, SplitwiseError> {
+        // For production: Use database query with index
+        Ok(self
+            .settlements
+            .lock()
+            .await
+            .values()
+            .filter(|s| s.group_id == group_id && s.to_user_id == user_id && !s.is_confirmed)
+            .cloned()
+            .collect())
     }
 
-    fn update_user(&mut self, user: User) -> Result<User, ExpenseServiceError> {
-        info!("Updating user {}", user.id);
-        if self.users.contains_key(&user.id) {
-            if self
-                .users
-                .values()
-                .any(|u| u.email == user.email && u.id != user.id)
-            {
-                warn!("Email {} already in use", user.email);
-                return Err(ExpenseServiceError::EmailInUse);
-            }
-            self.users.insert(user.id, user.clone());
-            debug!("User updated: {:?}", user);
-            Ok(user)
-        } else {
-            warn!("User {} not found", user.id);
-            Err(ExpenseServiceError::UserNotFound)
-        }
+    async fn save_app_log(&self, log: AppLog) -> Result<(), SplitwiseError> {
+        // For production: Batch writes
+        self.app_logs.lock().await.push(log);
+        Ok(())
     }
 
-    fn is_group_member(&self, group_id: Uuid, user_id: Uuid) -> bool {
-        debug!(
-            "Checking if user {} is member of group {}",
-            user_id, group_id
-        );
-        let is_member = self.groups.get(&group_id).map_or(false, |group| {
-            group.users.iter().any(|gu| gu.user_id == user_id)
-        });
-        debug!(
-            "User {} is_member of group {}: {}",
-            user_id, group_id, is_member
-        );
-        is_member
+    async fn get_app_logs(&self) -> Result<Vec<AppLog>, SplitwiseError> {
+        Ok(self.app_logs.lock().await.clone())
+    }
+
+    async fn save_group_audit(&self, audit: GroupAudit) -> Result<(), SplitwiseError> {
+        let mut audits = self.group_audits.lock().await;
+        audits
+            .entry(audit.group_id.clone())
+            .or_insert_with(Vec::new)
+            .push(audit);
+        Ok(())
+    }
+
+    async fn get_group_audits(&self, group_id: &str) -> Result<Vec<GroupAudit>, SplitwiseError> {
+        // For production: Add pagination
+        Ok(self
+            .group_audits
+            .lock()
+            .await
+            .get(group_id)
+            .cloned()
+            .unwrap_or_default())
     }
 }
