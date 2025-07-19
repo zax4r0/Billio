@@ -1,49 +1,123 @@
+use serde::Serialize;
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Debug, Serialize)]
+pub struct FieldError {
+    pub field: String,
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Error, Debug, Serialize)]
 pub enum SplitwiseError {
+    /// Email field is empty
     #[error("Email is required")]
     MissingEmail,
+
+    /// Email is already registered
     #[error("Email {0} already registered")]
     EmailAlreadyRegistered(String),
+
+    /// User with given ID not found
     #[error("User {0} not found")]
     UserNotFound(String),
+
+    /// Group with given ID not found
     #[error("Group {0} not found")]
     GroupNotFound(String),
+
+    /// User is already a member of the group
     #[error("User {0} is already a group member")]
     AlreadyGroupMember(String),
+
+    /// User is not a member of the group
     #[error("User {0} is not a group member")]
     NotGroupMember(String),
+
+    /// User is not the group owner
     #[error("User {0} is not group owner")]
     NotGroupOwner(String),
+
+    /// Group has an invalid number of owners (must be exactly 1)
     #[error("Invalid owner count: {0}")]
     InvalidOwnerCount(usize),
+
+    /// Group owner cannot remove themselves
     #[error("Owner cannot remove themselves")]
     OwnerCannotRemoveSelf,
+
+    /// Cannot remove the last member of a group
     #[error("Cannot remove last group member")]
     CannotRemoveLastMember,
-    #[error("Invalid join link")]
-    InvalidJoinLink,
+
+    /// Join link is not valid or not found
     #[error("Join link not found")]
     JoinLinkNotFound,
-    #[error("Invalid split amounts")]
-    InvalidSplit,
-    #[error("User {0} is not a group member for split")]
-    InvalidSplitUser(String),
-    #[error("Transaction {0} not found")]
-    TransactionNotFound(String),
+
+    /// Cannot create a settlement from a user to themselves
     #[error("Cannot create settlement to self")]
     SelfSettlement,
-    #[error("Settlement amount must be positive")]
-    InvalidSettlementAmount,
+
+    /// Transaction with given ID not found
+    #[error("Transaction {0} not found")]
+    TransactionNotFound(String),
+
+    /// Transaction is invalid for the settlement
     #[error("Invalid transaction {0} for settlement")]
     InvalidSettlementTransaction(String),
+
+    /// Settlement with given ID not found
     #[error("Settlement {0} not found")]
     SettlementNotFound(String),
+
+    /// Settlement has already been confirmed
     #[error("Settlement {0} already confirmed")]
     SettlementAlreadyConfirmed(String),
+
+    /// User is not authorized to confirm the settlement
     #[error("User {0} not authorized to confirm settlement")]
     UnauthorizedSettlementConfirmation(String),
+
+    /// Transaction has already been reversed
     #[error("Transaction {0} already reversed")]
     TransactionAlreadyReversed(String),
+
+    /// Email format is invalid
+    #[error("Invalid email format: {0}")]
+    InvalidEmail(String),
+
+    /// Generic input validation error with detailed field information
+    #[error("Invalid input for field `{0}`: {1:?}")]
+    InvalidInput(String, FieldError),
+
+    /// Internal server error (e.g., unexpected failure)
+    #[error("Internal server error: {0}")]
+    InternalServerError(String),
+
+    /// Database operation failed
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+
+    /// Catch-all for unexpected errors
+    #[error("Unexpected error: {0}")]
+    UnexpectedError(String),
+
+    // invalid split user
+    #[error("Invalid split user: {0}")]
+    InvalidSplitUser(String),
+    // invalid join link
+    #[error("Invalid join link")]
+    InvalidJoinLink,
+
+    #[error("Invalid split amounts")]
+    InvalidSettlementAmount,
+
+    #[error("Invalid split amounts")]
+    InvalidSplit,
+
+    #[error("Storage error: {0}")]
+    StorageError(String),
+
+    #[error("Logging error: {0}")]
+    LoggingError(String),
 }

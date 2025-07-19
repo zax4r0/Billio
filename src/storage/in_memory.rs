@@ -1,4 +1,3 @@
-// In storage/in_memory.rs
 use crate::error::SplitwiseError;
 use crate::models::{
     audit::{AppLog, GroupAudit},
@@ -45,7 +44,7 @@ impl InMemoryStorage {
 
 #[async_trait]
 impl Storage for InMemoryStorage {
-    async fn save_user(&self, user: User) -> Result<(), SplitwiseError> {
+    async fn create_user_if_not_exists(&self, user: User) -> Result<User, SplitwiseError> {
         // For production: Use database transactions
         let mut emails = self.emails.lock().await;
         if emails.contains_key(&user.email) {
@@ -53,8 +52,9 @@ impl Storage for InMemoryStorage {
         }
         emails.insert(user.email.clone(), user.id.clone());
         let mut users = self.users.lock().await;
-        users.insert(user.id.clone(), user);
-        Ok(())
+        let user_id = user.id.clone();
+        users.insert(user_id.clone(), user);
+        Ok(users.get(&user_id).cloned().unwrap())
     }
 
     async fn get_user(&self, id: &str) -> Result<Option<User>, SplitwiseError> {
@@ -124,10 +124,7 @@ impl Storage for InMemoryStorage {
         Ok(self.transactions.lock().await.get(id).cloned())
     }
 
-    async fn get_transactions_by_group(
-        &self,
-        group_id: &str,
-    ) -> Result<Vec<Transaction>, SplitwiseError> {
+    async fn get_transactions_by_group(&self, group_id: &str) -> Result<Vec<Transaction>, SplitwiseError> {
         // For production: Use database query with index
         Ok(self
             .transactions
@@ -139,10 +136,7 @@ impl Storage for InMemoryStorage {
             .collect())
     }
 
-    async fn get_transactions_by_user(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<Transaction>, SplitwiseError> {
+    async fn get_transactions_by_user(&self, user_id: &str) -> Result<Vec<Transaction>, SplitwiseError> {
         // For production: Use database index on user_id for faster queries
         let transactions = self.transactions.lock().await;
         let user_transactions = self.user_transactions.lock().await;
@@ -157,10 +151,7 @@ impl Storage for InMemoryStorage {
             .unwrap_or_default())
     }
 
-    async fn get_settlements_by_user(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<Settlement>, SplitwiseError> {
+    async fn get_settlements_by_user(&self, user_id: &str) -> Result<Vec<Settlement>, SplitwiseError> {
         // For production: Use database index on user_id
         let settlements = self.settlements.lock().await;
         let user_settlements = self.user_settlements.lock().await;
@@ -197,11 +188,7 @@ impl Storage for InMemoryStorage {
         Ok(self.settlements.lock().await.get(id).cloned())
     }
 
-    async fn get_pending_settlements(
-        &self,
-        group_id: &str,
-        user_id: &str,
-    ) -> Result<Vec<Settlement>, SplitwiseError> {
+    async fn get_pending_settlements(&self, group_id: &str, user_id: &str) -> Result<Vec<Settlement>, SplitwiseError> {
         // For production: Use database query with index
         Ok(self
             .settlements

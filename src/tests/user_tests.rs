@@ -38,8 +38,5 @@ async fn test_duplicate_email() {
     };
     splitwise.add_user(user1, None).await.unwrap();
     let result = splitwise.add_user(user2, None).await;
-    assert!(matches!(
-        result,
-        Err(SplitwiseError::EmailAlreadyRegistered(_))
-    ));
+    assert!(matches!(result, Err(SplitwiseError::EmailAlreadyRegistered(_))));
 }

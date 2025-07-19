@@ -6,18 +6,17 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use splitwise::logger::in_memory::InMemoryLogging;
 use splitwise::models::{
     audit::{AppLog, GroupAudit},
     group::Group,
     settlement::Settlement,
     transaction::Transaction,
-    transaction_split::Balance,
     user::User,
 };
 use splitwise::service::SplitwiseService;
 use splitwise::storage::in_memory::InMemoryStorage;
 use splitwise::{config::CONFIG, error::SplitwiseError};
+use splitwise::{logger::in_memory::InMemoryLogging, service::UserBalancesResponse};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -166,64 +165,35 @@ impl From<SplitwiseError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         let (status, error_message) = match self.0 {
-            SplitwiseError::MissingEmail => {
-                (StatusCode::BAD_REQUEST, "Email is required".to_string())
+            SplitwiseError::MissingEmail => (StatusCode::BAD_REQUEST, "Email is required".to_string()),
+            SplitwiseError::EmailAlreadyRegistered(email) => {
+                (StatusCode::CONFLICT, format!("Email {} already registered", email))
             }
-            SplitwiseError::EmailAlreadyRegistered(email) => (
-                StatusCode::CONFLICT,
-                format!("Email {} already registered", email),
-            ),
-            SplitwiseError::UserNotFound(id) => {
-                (StatusCode::NOT_FOUND, format!("User {} not found", id))
+            SplitwiseError::UserNotFound(id) => (StatusCode::NOT_FOUND, format!("User {} not found", id)),
+            SplitwiseError::GroupNotFound(id) => (StatusCode::NOT_FOUND, format!("Group {} not found", id)),
+            SplitwiseError::AlreadyGroupMember(id) => {
+                (StatusCode::CONFLICT, format!("User {} is already a group member", id))
             }
-            SplitwiseError::GroupNotFound(id) => {
-                (StatusCode::NOT_FOUND, format!("Group {} not found", id))
+            SplitwiseError::NotGroupMember(id) => (StatusCode::FORBIDDEN, format!("User {} is not a group member", id)),
+            SplitwiseError::NotGroupOwner(id) => (StatusCode::FORBIDDEN, format!("User {} is not group owner", id)),
+            SplitwiseError::InvalidOwnerCount(count) => {
+                (StatusCode::BAD_REQUEST, format!("Invalid owner count: {}", count))
             }
-            SplitwiseError::AlreadyGroupMember(id) => (
-                StatusCode::CONFLICT,
-                format!("User {} is already a group member", id),
-            ),
-            SplitwiseError::NotGroupMember(id) => (
-                StatusCode::FORBIDDEN,
-                format!("User {} is not a group member", id),
-            ),
-            SplitwiseError::NotGroupOwner(id) => (
-                StatusCode::FORBIDDEN,
-                format!("User {} is not group owner", id),
-            ),
-            SplitwiseError::InvalidOwnerCount(count) => (
-                StatusCode::BAD_REQUEST,
-                format!("Invalid owner count: {}", count),
-            ),
-            SplitwiseError::OwnerCannotRemoveSelf => (
-                StatusCode::FORBIDDEN,
-                "Owner cannot remove themselves".to_string(),
-            ),
-            SplitwiseError::CannotRemoveLastMember => (
-                StatusCode::BAD_REQUEST,
-                "Cannot remove last group member".to_string(),
-            ),
-            SplitwiseError::InvalidJoinLink => {
-                (StatusCode::BAD_REQUEST, "Invalid join link".to_string())
+            SplitwiseError::OwnerCannotRemoveSelf => {
+                (StatusCode::FORBIDDEN, "Owner cannot remove themselves".to_string())
             }
-            SplitwiseError::JoinLinkNotFound => {
-                (StatusCode::NOT_FOUND, "Join link not found".to_string())
+            SplitwiseError::CannotRemoveLastMember => {
+                (StatusCode::BAD_REQUEST, "Cannot remove last group member".to_string())
             }
-            SplitwiseError::InvalidSplit => {
-                (StatusCode::BAD_REQUEST, "Invalid split amounts".to_string())
-            }
+            SplitwiseError::InvalidJoinLink => (StatusCode::BAD_REQUEST, "Invalid join link".to_string()),
+            SplitwiseError::JoinLinkNotFound => (StatusCode::NOT_FOUND, "Join link not found".to_string()),
+            SplitwiseError::InvalidSplit => (StatusCode::BAD_REQUEST, "Invalid split amounts".to_string()),
             SplitwiseError::InvalidSplitUser(id) => (
                 StatusCode::BAD_REQUEST,
                 format!("User {} is not a group member for split", id),
             ),
-            SplitwiseError::TransactionNotFound(id) => (
-                StatusCode::NOT_FOUND,
-                format!("Transaction {} not found", id),
-            ),
-            SplitwiseError::SelfSettlement => (
-                StatusCode::BAD_REQUEST,
-                "Cannot create settlement to self".to_string(),
-            ),
+            SplitwiseError::TransactionNotFound(id) => (StatusCode::NOT_FOUND, format!("Transaction {} not found", id)),
+            SplitwiseError::SelfSettlement => (StatusCode::BAD_REQUEST, "Cannot create settlement to self".to_string()),
             SplitwiseError::InvalidSettlementAmount => (
                 StatusCode::BAD_REQUEST,
                 "Settlement amount must be positive".to_string(),
@@ -232,14 +202,10 @@ impl IntoResponse for ApiError {
                 StatusCode::BAD_REQUEST,
                 format!("Invalid transaction {} for settlement", id),
             ),
-            SplitwiseError::SettlementNotFound(id) => (
-                StatusCode::NOT_FOUND,
-                format!("Settlement {} not found", id),
-            ),
-            SplitwiseError::SettlementAlreadyConfirmed(id) => (
-                StatusCode::CONFLICT,
-                format!("Settlement {} already confirmed", id),
-            ),
+            SplitwiseError::SettlementNotFound(id) => (StatusCode::NOT_FOUND, format!("Settlement {} not found", id)),
+            SplitwiseError::SettlementAlreadyConfirmed(id) => {
+                (StatusCode::CONFLICT, format!("Settlement {} already confirmed", id))
+            }
             SplitwiseError::UnauthorizedSettlementConfirmation(id) => (
                 StatusCode::FORBIDDEN,
                 format!("User {} not authorized to confirm settlement", id),
@@ -248,14 +214,25 @@ impl IntoResponse for ApiError {
                 StatusCode::CONFLICT,
                 format!("Transaction {} has already been reversed", id),
             ),
+            SplitwiseError::InvalidEmail(email) => (StatusCode::BAD_REQUEST, format!("Invalid email: {}", email)),
+            SplitwiseError::InvalidInput(field, msg) => (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid input for {}: {:?}", field, msg),
+            ),
+            SplitwiseError::InternalServerError(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Internal server error: {}", msg),
+            ),
+            SplitwiseError::StorageError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {}", msg)),
+            SplitwiseError::LoggingError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Logging error: {}", msg)),
+            SplitwiseError::DatabaseError(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", msg))
+            }
+            SplitwiseError::UnexpectedError(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Unexpected error: {}", msg))
+            }
         };
-        (
-            status,
-            Json(ErrorResponse {
-                error: error_message,
-            }),
-        )
-            .into_response()
+        (status, Json(ErrorResponse { error: error_message })).into_response()
     }
 }
 
@@ -354,9 +331,7 @@ async fn add_member_to_group(
         .get_user(&req.added_by_id)
         .await?
         .ok_or_else(|| SplitwiseError::UserNotFound(req.added_by_id))?;
-    service
-        .add_member_to_group(&group_id, user, &added_by)
-        .await?;
+    service.add_member_to_group(&group_id, user, &added_by).await?;
     Ok(StatusCode::OK)
 }
 
@@ -369,9 +344,7 @@ async fn add_member_by_email(
         .get_user(&req.added_by_id)
         .await?
         .ok_or_else(|| SplitwiseError::UserNotFound(req.added_by_id))?;
-    service
-        .add_member_by_email(&group_id, &req.email, &added_by)
-        .await?;
+    service.add_member_by_email(&group_id, &req.email, &added_by).await?;
     Ok(StatusCode::OK)
 }
 
@@ -412,9 +385,7 @@ async fn regenerate_join_link(
         .get_user(&req.regenerated_by_id)
         .await?
         .ok_or_else(|| SplitwiseError::UserNotFound(req.regenerated_by_id))?;
-    let new_link = service
-        .regenerate_join_link(&group_id, &regenerated_by)
-        .await?;
+    let new_link = service.regenerate_join_link(&group_id, &regenerated_by).await?;
     Ok(Json(new_link))
 }
 
@@ -485,9 +456,7 @@ async fn reverse_transaction(
         .get_user(&req.reversed_by_id)
         .await?
         .ok_or_else(|| SplitwiseError::UserNotFound(req.reversed_by_id))?;
-    let reversal = service
-        .reverse_transaction(&req.transaction_id, &reversed_by)
-        .await?;
+    let reversal = service.reverse_transaction(&req.transaction_id, &reversed_by).await?;
     Ok(Json(reversal))
 }
 
@@ -529,9 +498,7 @@ async fn confirm_settlement(
         .get_user(&req.confirmed_by_id)
         .await?
         .ok_or_else(|| SplitwiseError::UserNotFound(req.confirmed_by_id))?;
-    service
-        .confirm_settlement(&req.settlement_id, &confirmed_by)
-        .await?;
+    service.confirm_settlement(&req.settlement_id, &confirmed_by).await?;
     Ok(StatusCode::OK)
 }
 
@@ -543,16 +510,14 @@ async fn get_pending_settlements(
         .get_user(&req.user_id)
         .await?
         .ok_or_else(|| SplitwiseError::UserNotFound(req.user_id))?;
-    let settlements = service
-        .get_pending_settlements(&req.group_id, &user)
-        .await?;
+    let settlements = service.get_pending_settlements(&req.group_id, &user).await?;
     Ok(Json(settlements))
 }
 
 async fn get_user_balances(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
     Json(req): Json<GetUserBalancesRequest>,
-) -> Result<Json<Vec<Balance>>, ApiError> {
+) -> Result<Json<UserBalancesResponse>, ApiError> {
     let queried_by = service
         .get_user(&req.queried_by_id)
         .await?
@@ -569,9 +534,7 @@ async fn get_effective_transactions(
         .get_user(&req.queried_by_id)
         .await?
         .ok_or_else(|| SplitwiseError::UserNotFound(req.queried_by_id))?;
-    let transactions = service
-        .get_effective_transactions(&req.group_id, &queried_by)
-        .await?;
+    let transactions = service.get_effective_transactions(&req.group_id, &queried_by).await?;
     Ok(Json(transactions))
 }
 
@@ -610,26 +573,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/groups/{group_id}", axum::routing::delete(delete_group))
         .route("/groups/join", post(join_group_by_link))
         .route("/groups/{group_id}/members", post(add_member_to_group))
-        .route(
-            "/groups/{group_id}/members/email",
-            post(add_member_by_email),
-        )
-        .route(
-            "/groups/{group_id}/members/remove",
-            post(remove_member_from_group),
-        )
-        .route(
-            "/groups/{group_id}/join_link/revoke",
-            post(revoke_join_link),
-        )
-        .route(
-            "/groups/{group_id}/join_link/regenerate",
-            post(regenerate_join_link),
-        )
-        .route(
-            "/groups/{group_id}/strict_mode",
-            post(toggle_strict_settlement_mode),
-        )
+        .route("/groups/{group_id}/members/email", post(add_member_by_email))
+        .route("/groups/{group_id}/members/remove", post(remove_member_from_group))
+        .route("/groups/{group_id}/join_link/revoke", post(revoke_join_link))
+        .route("/groups/{group_id}/join_link/regenerate", post(regenerate_join_link))
+        .route("/groups/{group_id}/strict_mode", post(toggle_strict_settlement_mode))
         .route("/groups/{group_id}/ownership", post(transfer_ownership))
         .route("/expenses", post(add_expense))
         .route("/transactions/reverse", post(reverse_transaction))
