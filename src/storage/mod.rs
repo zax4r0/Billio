@@ -1,3 +1,4 @@
+// In storage/mod.rs
 pub mod in_memory;
 
 use crate::error::SplitwiseError;
@@ -6,7 +7,6 @@ use crate::models::{
     group::Group,
     settlement::Settlement,
     transaction::Transaction,
-    transaction_split::Balance,
     user::User,
 };
 use async_trait::async_trait;
@@ -26,13 +26,15 @@ pub trait Storage: Send + Sync {
         &self,
         group_id: &str,
     ) -> Result<Vec<Transaction>, SplitwiseError>;
-    async fn save_balance(
+    // Removed: save_balance, get_balances
+    async fn get_transactions_by_user(
         &self,
         user_id: &str,
-        owes_to: &str,
-        amount: f64,
-    ) -> Result<(), SplitwiseError>;
-    async fn get_balances(&self, user_id: &str) -> Result<Vec<Balance>, SplitwiseError>;
+    ) -> Result<Vec<Transaction>, SplitwiseError>;
+    async fn get_settlements_by_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<Settlement>, SplitwiseError>;
     async fn save_settlement(&self, settlement: Settlement) -> Result<(), SplitwiseError>;
     async fn get_settlement(&self, id: &str) -> Result<Option<Settlement>, SplitwiseError>;
     async fn get_pending_settlements(
@@ -46,4 +48,5 @@ pub trait Storage: Send + Sync {
     async fn get_group_audits(&self, group_id: &str) -> Result<Vec<GroupAudit>, SplitwiseError>;
     async fn is_group_member(&self, group_id: &str, user_id: &str) -> Result<bool, SplitwiseError>;
     async fn get_user_groups(&self, user_id: &str) -> Result<Vec<Group>, SplitwiseError>;
+    async fn delete_group(&self, group_id: &str) -> Result<(), SplitwiseError>;
 }

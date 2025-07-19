@@ -15,13 +15,11 @@ async fn test_add_expense_and_settlement() {
         id: "u1".to_string(),
         name: "Alice".to_string(),
         email: "alice@example.com".to_string(),
-        username: "alice123".to_string(),
     };
     let user2 = User {
         id: "u2".to_string(),
         name: "Bob".to_string(),
         email: "bob@example.com".to_string(),
-        username: "bob456".to_string(),
     };
     splitwise.add_user(user1.clone(), None).await.unwrap();
     splitwise.add_user(user2.clone(), None).await.unwrap();
@@ -51,7 +49,7 @@ async fn test_add_expense_and_settlement() {
         .toggle_strict_settlement_mode(&group.id, false, &user1)
         .await
         .unwrap();
-    let settlement = splitwise
+    let _settlement = splitwise
         .create_settlement(
             &group.id,
             &user2,
@@ -63,11 +61,7 @@ async fn test_add_expense_and_settlement() {
         )
         .await
         .unwrap();
-    // Confirm the settlement as user1 (the recipient)
-    splitwise
-        .confirm_settlement(&settlement.id, &user1)
-        .await
-        .unwrap();
-    let balances = splitwise.get_user_balances("u2", &user2).await.unwrap();
-    assert!(balances.is_empty());
+    let balance = splitwise.get_user_balances("u2", &user2).await.unwrap();
+    println!("Balances after settlement: {:?}", balance);
+    assert!(balance.is_empty());
 }

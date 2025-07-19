@@ -1,0 +1,14 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Axum Dev Server (Task)",
+			"type": "node",
+			"request": "launch",
+			"runtimeExecutable": "echo",
+			"args": ["Axum server is running via cargo-watch task..."],
+			"preLaunchTask": "watch-axum",
+			"console": "integratedTerminal"
+		}
+	]
+}

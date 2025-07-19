@@ -13,7 +13,6 @@ async fn test_add_user() {
         id: "u1".to_string(),
         name: "Alice".to_string(),
         email: "alice@example.com".to_string(),
-        username: "alice123".to_string(),
     };
     splitwise.add_user(user.clone(), None).await.unwrap();
     assert_eq!(
@@ -31,13 +30,11 @@ async fn test_duplicate_email() {
         id: "u1".to_string(),
         name: "Alice".to_string(),
         email: "alice@example.com".to_string(),
-        username: "alice123".to_string(),
     };
     let user2 = User {
         id: "u2".to_string(),
         name: "Bob".to_string(),
         email: "alice@example.com".to_string(),
-        username: "bob456".to_string(),
     };
     splitwise.add_user(user1, None).await.unwrap();
     let result = splitwise.add_user(user2, None).await;

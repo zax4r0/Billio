@@ -1,15 +1,15 @@
+// In storage/in_memory.rs
 use crate::error::SplitwiseError;
 use crate::models::{
     audit::{AppLog, GroupAudit},
     group::Group,
     settlement::Settlement,
     transaction::Transaction,
-    transaction_split::Balance,
     user::User,
 };
 use crate::storage::Storage;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::Mutex;
 
 pub struct InMemoryStorage {
@@ -18,10 +18,12 @@ pub struct InMemoryStorage {
     groups: Mutex<HashMap<String, Group>>,
     join_links: Mutex<HashMap<String, String>>, // link -> group_id
     transactions: Mutex<HashMap<String, Transaction>>,
-    balances: Mutex<HashMap<String, HashMap<String, f64>>>, // user_id -> (owes_to -> amount)
     settlements: Mutex<HashMap<String, Settlement>>,
     app_logs: Mutex<Vec<AppLog>>,
     group_audits: Mutex<HashMap<String, Vec<GroupAudit>>>,
+    // Indexes for faster user-based queries
+    user_transactions: Mutex<HashMap<String, HashSet<String>>>, // user_id -> transaction_ids
+    user_settlements: Mutex<HashMap<String, HashSet<String>>>,  // user_id -> settlement_ids
 }
 
 impl InMemoryStorage {
@@ -32,10 +34,11 @@ impl InMemoryStorage {
             groups: Mutex::new(HashMap::new()),
             join_links: Mutex::new(HashMap::new()),
             transactions: Mutex::new(HashMap::new()),
-            balances: Mutex::new(HashMap::new()),
             settlements: Mutex::new(HashMap::new()),
             app_logs: Mutex::new(Vec::new()),
             group_audits: Mutex::new(HashMap::new()),
+            user_transactions: Mutex::new(HashMap::new()),
+            user_settlements: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -43,6 +46,7 @@ impl InMemoryStorage {
 #[async_trait]
 impl Storage for InMemoryStorage {
     async fn save_user(&self, user: User) -> Result<(), SplitwiseError> {
+        // For production: Use database transactions
         let mut emails = self.emails.lock().await;
         if emails.contains_key(&user.email) {
             return Err(SplitwiseError::EmailAlreadyRegistered(user.email));
@@ -54,6 +58,7 @@ impl Storage for InMemoryStorage {
     }
 
     async fn get_user(&self, id: &str) -> Result<Option<User>, SplitwiseError> {
+        // For production: Add caching
         Ok(self.users.lock().await.get(id).cloned())
     }
 
@@ -96,14 +101,26 @@ impl Storage for InMemoryStorage {
     }
 
     async fn save_transaction(&self, transaction: Transaction) -> Result<(), SplitwiseError> {
-        self.transactions
-            .lock()
-            .await
-            .insert(transaction.id.clone(), transaction);
+        // For production: Use database transactions
+        let mut transactions = self.transactions.lock().await;
+        let mut user_transactions = self.user_transactions.lock().await;
+        transactions.insert(transaction.id.clone(), transaction.clone());
+        // Update user index
+        user_transactions
+            .entry(transaction.paid_by.id.clone())
+            .or_insert_with(HashSet::new)
+            .insert(transaction.id.clone());
+        for user_id in transaction.shares.keys() {
+            user_transactions
+                .entry(user_id.clone())
+                .or_insert_with(HashSet::new)
+                .insert(transaction.id.clone());
+        }
         Ok(())
     }
 
     async fn get_transaction(&self, id: &str) -> Result<Option<Transaction>, SplitwiseError> {
+        // For production: Use database query
         Ok(self.transactions.lock().await.get(id).cloned())
     }
 
@@ -122,34 +139,37 @@ impl Storage for InMemoryStorage {
             .collect())
     }
 
-    async fn save_balance(
+    async fn get_transactions_by_user(
         &self,
         user_id: &str,
-        owes_to: &str,
-        amount: f64,
-    ) -> Result<(), SplitwiseError> {
-        let mut balances = self.balances.lock().await;
-        let user_balances = balances
-            .entry(user_id.to_string())
-            .or_insert_with(HashMap::new);
-        let current = user_balances.get(owes_to).copied().unwrap_or(0.0);
-        user_balances.insert(owes_to.to_string(), current + amount);
-        Ok(())
+    ) -> Result<Vec<Transaction>, SplitwiseError> {
+        // For production: Use database index on user_id for faster queries
+        let transactions = self.transactions.lock().await;
+        let user_transactions = self.user_transactions.lock().await;
+        Ok(user_transactions
+            .get(user_id)
+            .map(|tx_ids| {
+                tx_ids
+                    .iter()
+                    .filter_map(|tx_id| transactions.get(tx_id).cloned())
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
-    async fn get_balances(&self, user_id: &str) -> Result<Vec<Balance>, SplitwiseError> {
-        Ok(self
-            .balances
-            .lock()
-            .await
+    async fn get_settlements_by_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<Settlement>, SplitwiseError> {
+        // For production: Use database index on user_id
+        let settlements = self.settlements.lock().await;
+        let user_settlements = self.user_settlements.lock().await;
+        Ok(user_settlements
             .get(user_id)
-            .map(|b| {
-                b.iter()
-                    .map(|(owes_to, amount)| Balance {
-                        user_id: user_id.to_string(),
-                        owes_to: owes_to.to_string(),
-                        amount: *amount,
-                    })
+            .map(|settle_ids| {
+                settle_ids
+                    .iter()
+                    .filter_map(|settle_id| settlements.get(settle_id).cloned())
                     .collect()
             })
             .unwrap_or_default())
@@ -157,14 +177,23 @@ impl Storage for InMemoryStorage {
 
     async fn save_settlement(&self, settlement: Settlement) -> Result<(), SplitwiseError> {
         // For production: Use database transactions
-        self.settlements
-            .lock()
-            .await
-            .insert(settlement.id.clone(), settlement);
+        let mut settlements = self.settlements.lock().await;
+        let mut user_settlements = self.user_settlements.lock().await;
+        settlements.insert(settlement.id.clone(), settlement.clone());
+        // Update user index
+        user_settlements
+            .entry(settlement.from_user_id.clone())
+            .or_insert_with(HashSet::new)
+            .insert(settlement.id.clone());
+        user_settlements
+            .entry(settlement.to_user_id.clone())
+            .or_insert_with(HashSet::new)
+            .insert(settlement.id.clone());
         Ok(())
     }
 
     async fn get_settlement(&self, id: &str) -> Result<Option<Settlement>, SplitwiseError> {
+        // For production: Use database query
         Ok(self.settlements.lock().await.get(id).cloned())
     }
 
@@ -195,6 +224,7 @@ impl Storage for InMemoryStorage {
     }
 
     async fn save_group_audit(&self, audit: GroupAudit) -> Result<(), SplitwiseError> {
+        // For production: Use database transactions
         let mut audits = self.group_audits.lock().await;
         audits
             .entry(audit.group_id.clone())
@@ -215,6 +245,7 @@ impl Storage for InMemoryStorage {
     }
 
     async fn is_group_member(&self, group_id: &str, user_id: &str) -> Result<bool, SplitwiseError> {
+        // For production: Use database query
         let groups = self.groups.lock().await;
         if let Some(group) = groups.get(group_id) {
             Ok(group.members.iter().any(|m| m.user.id == user_id))
@@ -233,5 +264,23 @@ impl Storage for InMemoryStorage {
             .filter(|g| g.members.iter().any(|m| m.user.id == user_id))
             .cloned()
             .collect())
+    }
+
+    async fn delete_group(&self, group_id: &str) -> Result<(), SplitwiseError> {
+        // For production: Use database transactions
+        let mut groups = self.groups.lock().await;
+        if groups.remove(group_id).is_none() {
+            return Err(SplitwiseError::GroupNotFound(group_id.to_string()));
+        }
+        // Also remove join link
+        let mut join_links = self.join_links.lock().await;
+        if let Some((link, _)) = join_links
+            .iter()
+            .find(|(_, gid)| gid == &group_id)
+            .map(|(l, _)| (l.clone(), ()))
+        {
+            join_links.remove(&link);
+        }
+        Ok(())
     }
 }

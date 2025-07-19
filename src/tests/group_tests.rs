@@ -12,7 +12,6 @@ async fn test_create_group() {
         id: "u1".to_string(),
         name: "Alice".to_string(),
         email: "alice@example.com".to_string(),
-        username: "alice123".to_string(),
     };
     splitwise.add_user(user.clone(), None).await.unwrap();
     let group = splitwise

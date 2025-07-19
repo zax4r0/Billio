@@ -15,6 +15,12 @@ use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+#[derive(serde::Serialize)]
+pub struct UserBalancesResponse {
+    circular_balances: Vec<Balance>,
+    minimized_balances: Vec<Balance>,
+}
+
 pub struct SplitwiseService<L: LoggingService, S: Storage> {
     storage: S,
     logging: L,
@@ -92,8 +98,40 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             GROUP_CREATED,
             json!({ "name": group.name, "member_ids": group.members.iter().map(|m| m.user.id.clone()).collect::<Vec<_>>(), "join_link": group.join_link }),
             Some(created_by.id.as_str()),
-        ).await?;
+        )
+        .await?;
         Ok(group)
+    }
+
+    pub async fn delete_group(
+        &self,
+        group_id: &str,
+        deleted_by: &User,
+    ) -> Result<(), SplitwiseError> {
+        let group = self.get_group(group_id).await?;
+        self.validate_user(&deleted_by.id).await?;
+        self.validate_owner(&group, &deleted_by.id)?;
+
+        // Remove group and associated join link
+        self.storage.revoke_join_link(&group.join_link).await?;
+        self.storage.delete_group(group_id).await?;
+
+        // Log and audit the deletion
+        self.logging
+            .log_action(
+                GROUP_DELETED,
+                json!({ "group_id": group_id, "name": group.name }),
+                Some(deleted_by.id.as_str()),
+            )
+            .await?;
+        self.audit_action(
+            group_id,
+            GROUP_DELETED,
+            json!({ "name": group.name }),
+            Some(deleted_by.id.as_str()),
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn add_member_to_group(
@@ -234,12 +272,15 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             MEMBER_JOINED,
             json!({ "user_id": user.id, "name": user.name, "email": user.email, "join_link": join_link }),
             Some(user.id.as_str()),
-        ).await?;
-        self.logging.log_action(
-            MEMBER_JOINED,
-            json!({ "group_id": group.id, "user_id": user.id, "email": user.email, "join_link": join_link }),
-            Some(user.id.as_str()),
-        ).await?;
+        )
+        .await?;
+        self.logging
+            .log_action(
+                MEMBER_JOINED,
+                json!({ "group_id": group.id, "user_id": user.id, "email": user.email, "join_link": join_link }),
+                Some(user.id.as_str()),
+            )
+            .await?;
         Ok(())
     }
 
@@ -373,11 +414,13 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             Some(transferred_by.id.as_str()),
         )
         .await?;
-        self.logging.log_action(
-            OWNERSHIP_TRANSFERRED,
-            json!({ "group_id": group_id, "old_owner_id": transferred_by.id, "new_owner_id": new_owner.id }),
-            Some(transferred_by.id.as_str()),
-        ).await?;
+        self.logging
+            .log_action(
+                OWNERSHIP_TRANSFERRED,
+                json!({ "group_id": group_id, "old_owner_id": transferred_by.id, "new_owner_id": new_owner.id }),
+                Some(transferred_by.id.as_str()),
+            )
+            .await?;
         Ok(())
     }
 
@@ -417,18 +460,20 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             reversed_by: None,
         };
         self.storage.save_transaction(transaction.clone()).await?;
-        self.update_balances(&transaction).await?;
-        self.logging.log_action(
-            EXPENSE_ADDED,
-            json!({ "transaction_id": transaction.id, "group_id": group_id, "description": transaction.description, "amount": transaction.amount }),
-            Some(created_by.id.as_str()),
-        ).await?;
+        self.logging
+            .log_action(
+                EXPENSE_ADDED,
+                json!({ "transaction_id": transaction.id, "group_id": group_id, "description": transaction.description, "amount": transaction.amount }),
+                Some(created_by.id.as_str()),
+            )
+            .await?;
         self.audit_action(
             group_id,
             EXPENSE_ADDED,
             json!({ "transaction_id": transaction.id, "description": transaction.description, "amount": transaction.amount, "paid_by_id": transaction.paid_by.id }),
             Some(created_by.id.as_str()),
-        ).await?;
+        )
+        .await?;
         Ok(transaction)
     }
 
@@ -484,7 +529,6 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             })
             .await?;
         self.storage.save_transaction(reversal.clone()).await?;
-        self.update_balances(&reversal).await?;
         self.logging
             .log_action(
                 TRANSACTION_REVERSED,
@@ -557,22 +601,6 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             },
         };
         self.storage.save_settlement(settlement.clone()).await?;
-        if !group.strict_settlement_mode {
-            self.storage
-                .save_balance(
-                    &settlement.from_user_id,
-                    &settlement.to_user_id,
-                    -settlement.amount,
-                )
-                .await?;
-            self.storage
-                .save_balance(
-                    &settlement.to_user_id,
-                    &settlement.from_user_id,
-                    settlement.amount,
-                )
-                .await?;
-        }
         self.logging
             .log_action(
                 SETTLEMENT_CREATED,
@@ -631,20 +659,6 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         settlement.is_confirmed = true;
         settlement.confirmed_by = Some(confirmed_by.id.clone());
         self.storage.save_settlement(settlement.clone()).await?;
-        self.storage
-            .save_balance(
-                &settlement.from_user_id,
-                &settlement.to_user_id,
-                -settlement.amount,
-            )
-            .await?;
-        self.storage
-            .save_balance(
-                &settlement.to_user_id,
-                &settlement.from_user_id,
-                settlement.amount,
-            )
-            .await?;
         self.logging
             .log_action(
                 SETTLEMENT_CONFIRMED,
@@ -657,7 +671,8 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             SETTLEMENT_CONFIRMED,
             json!({ "settlement_id": settlement_id, "from_user_id": settlement.from_user_id, "to_user_id": settlement.to_user_id }),
             Some(confirmed_by.id.as_str()),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -689,20 +704,87 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         &self,
         user_id: &str,
         queried_by: &User,
-    ) -> Result<Vec<Balance>, SplitwiseError> {
+    ) -> Result<UserBalancesResponse, SplitwiseError> {
+        // For production: Cache results
         self.validate_user(user_id).await?;
         self.validate_user(&queried_by.id).await?;
-        let balances = self.storage.get_balances(user_id).await?;
-        self.logging
-            .log_action(
-                BALANCE_QUERIED,
-                json!({ "user_id": user_id, "balances_count": balances.len() }),
-                Some(queried_by.id.as_str()),
-            )
-            .await?;
-        Ok(balances)
-    }
 
+        // Calculate balances on-the-fly
+        let transactions = self.storage.get_transactions_by_user(user_id).await?;
+        let settlements = self.storage.get_settlements_by_user(user_id).await?;
+        let mut balances: HashMap<String, f64> = HashMap::new();
+
+        // Process transactions
+        for tx in transactions.iter().filter(|t| !t.is_reversed) {
+            if let Some(amount) = tx.shares.get(user_id) {
+                *balances.entry(tx.paid_by.id.clone()).or_insert(0.0) += amount;
+            }
+            if tx.paid_by.id == user_id {
+                for (uid, amount) in &tx.shares {
+                    *balances.entry(uid.clone()).or_insert(0.0) -= amount;
+                }
+            }
+        }
+
+        // Process confirmed settlements
+        for s in settlements.iter().filter(|s| s.is_confirmed) {
+            if s.from_user_id == user_id {
+                *balances.entry(s.to_user_id.clone()).or_insert(0.0) -= s.amount;
+            } else if s.to_user_id == user_id {
+                *balances.entry(s.from_user_id.clone()).or_insert(0.0) += s.amount;
+            }
+        }
+
+        // Store circular balances (raw, unoptimized)
+        let circular_balances = balances
+            .iter()
+            .filter(|(_, amount)| amount.abs() >= 0.01)
+            .map(|(owes_to, amount)| Balance {
+                user_id: user_id.to_string(),
+                owes_to: owes_to.clone(),
+                amount: *amount,
+            })
+            .collect::<Vec<Balance>>();
+
+        // Minimize transactions (Settle Up-inspired)
+        let mut optimized_balances = balances
+            .into_iter()
+            .filter(|(_, amount)| amount.abs() >= 0.01)
+            .map(|(owes_to, amount)| Balance {
+                user_id: user_id.to_string(),
+                owes_to,
+                amount,
+            })
+            .collect::<Vec<Balance>>();
+        // Simple minimization: reduce circular debts
+        for i in 0..optimized_balances.len() {
+            for j in (i + 1)..optimized_balances.len() {
+                if optimized_balances[i].owes_to == user_id
+                    && optimized_balances[j].user_id == user_id
+                {
+                    let min_amount = optimized_balances[i]
+                        .amount
+                        .min(optimized_balances[j].amount.abs());
+                    optimized_balances[i].amount -= min_amount;
+                    optimized_balances[j].amount += min_amount;
+                }
+            }
+        }
+        optimized_balances.retain(|b| b.amount.abs() >= 0.01);
+
+        self.logging
+        .log_action(
+            BALANCE_QUERIED,
+            json!({ "user_id": user_id, "circular_count": circular_balances.len(), "minimized_count": optimized_balances.len() }),
+            Some(queried_by.id.as_str()),
+        )
+        .await?;
+
+        Ok(UserBalancesResponse {
+            circular_balances,
+            minimized_balances: optimized_balances,
+        })
+    }
     pub async fn get_effective_transactions(
         &self,
         group_id: &str,
@@ -739,20 +821,6 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         group_id: &str,
     ) -> Result<Vec<GroupAudit>, SplitwiseError> {
         self.storage.get_group_audits(group_id).await
-    }
-
-    async fn update_balances(&self, transaction: &Transaction) -> Result<(), SplitwiseError> {
-        for (user_id, amount) in &transaction.shares {
-            if user_id != &transaction.paid_by.id {
-                self.storage
-                    .save_balance(user_id, &transaction.paid_by.id, *amount)
-                    .await?;
-                self.storage
-                    .save_balance(&transaction.paid_by.id, user_id, -amount)
-                    .await?;
-            }
-        }
-        Ok(())
     }
 
     pub async fn get_group_members(

@@ -36,7 +36,6 @@ struct CreateUserRequest {
     id: String,
     name: String,
     email: String,
-    username: String,
     created_by_id: Option<String>,
 }
 
@@ -130,6 +129,11 @@ struct ConfirmSettlementRequest {
 struct GetPendingSettlementsRequest {
     group_id: String,
     user_id: String,
+}
+
+#[derive(Deserialize)]
+struct DeleteGroupRequest {
+    deleted_by_id: String,
 }
 
 #[derive(Deserialize)]
@@ -263,7 +267,6 @@ async fn create_user(
         id: req.id,
         name: req.name,
         email: req.email,
-        username: req.username,
     };
     let created_by_user = if let Some(ref id) = req.created_by_id {
         Some(
@@ -311,6 +314,19 @@ async fn create_group(
     let members = futures::future::try_join_all(members).await?;
     let group = service.create_group(req.name, members, &created_by).await?;
     Ok(Json(group))
+}
+
+async fn delete_group(
+    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage>>>,
+    Path(group_id): Path<String>,
+    Json(req): Json<DeleteGroupRequest>,
+) -> Result<StatusCode, ApiError> {
+    let deleted_by = service
+        .get_user(&req.deleted_by_id)
+        .await?
+        .ok_or_else(|| SplitwiseError::UserNotFound(req.deleted_by_id))?;
+    service.delete_group(&group_id, &deleted_by).await?;
+    Ok(StatusCode::OK)
 }
 
 async fn join_group_by_link(
@@ -586,9 +602,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Define API routes
     let app = Router::new()
+        // add / route with a simple health check
+        .route("/", get(|| async { "OK" }))
         .route("/users", post(create_user))
         .route("/users/{user_id}", get(get_user))
         .route("/groups", post(create_group))
+        .route("/groups/{group_id}", axum::routing::delete(delete_group))
         .route("/groups/join", post(join_group_by_link))
         .route("/groups/{group_id}/members", post(add_member_to_group))
         .route(

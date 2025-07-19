@@ -1,0 +1,26 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "watch-axum",
+			"type": "shell",
+			"command": "cargo watch -x run",
+			"problemMatcher": [],
+			"isBackground": true,
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"type": "cargo",
+			"command": "run",
+			"problemMatcher": ["$rustc"],
+			"label": "rust: cargo run"
+		}
+	]
+}
