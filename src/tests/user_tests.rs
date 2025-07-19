@@ -1,81 +1,48 @@
-use crate::{ExpenseService, ExpenseServiceError, InMemoryAuditLogger, InMemoryStorage};
-use env_logger;
+use crate::error::SplitwiseError;
+use crate::logger::in_memory::InMemoryLogging;
+use crate::models::user::User;
+use crate::service::SplitwiseService;
+use crate::storage::in_memory::InMemoryStorage;
 
-#[test]
-fn test_create_user_with_unique_email() {
-    let _ = env_logger::try_init();
-    let mut storage = InMemoryStorage::new();
-    let mut audit_logger = InMemoryAuditLogger::new();
-    let mut service = ExpenseService::new(&mut storage, &mut audit_logger);
-
-    let user1 = service
-        .create_user(
-            "user1@example.com".to_string(),
-            "hashed_password".to_string(),
-            "User 1".to_string(),
-        )
-        .unwrap();
-
-    assert_eq!(user1.email, "user1@example.com");
-
-    // Drop service before accessing audit_logger
-    drop(service);
-
-    let logs = audit_logger.get_logs();
-    assert_eq!(logs.len(), 1);
-    assert_eq!(logs[0].action, crate::models::AuditAction::CreateUser);
-
-    // Recreate service after dropping previous one
-    let mut service = ExpenseService::new(&mut storage, &mut audit_logger);
-
-    let result = service.create_user(
-        "user1@example.com".to_string(),
-        "hashed_password".to_string(),
-        "User 2".to_string(),
+#[tokio::test]
+async fn test_add_user() {
+    let storage = InMemoryStorage::new();
+    let logging = InMemoryLogging::new();
+    let splitwise = SplitwiseService::new(storage, logging);
+    let user = User {
+        id: "u1".to_string(),
+        name: "Alice".to_string(),
+        email: "alice@example.com".to_string(),
+        username: "alice123".to_string(),
+    };
+    splitwise.add_user(user.clone(), None).await.unwrap();
+    assert_eq!(
+        splitwise.get_user("u1").await.unwrap().unwrap().email,
+        "alice@example.com"
     );
-
-    assert!(matches!(result, Err(ExpenseServiceError::EmailInUse)));
 }
 
-#[test]
-fn test_update_user_email_validation() {
-    let _ = env_logger::try_init();
-    let mut storage = InMemoryStorage::new();
-    let mut audit_logger = InMemoryAuditLogger::new();
-    let mut service = ExpenseService::new(&mut storage, &mut audit_logger);
-
-    let _user1 = service
-        .create_user(
-            "user1@example.com".to_string(),
-            "hashed_password".to_string(),
-            "User 1".to_string(),
-        )
-        .unwrap();
-
-    let user2 = service
-        .create_user(
-            "user2@example.com".to_string(),
-            "hashed_password".to_string(),
-            "User 2".to_string(),
-        )
-        .unwrap();
-
-    let mut updated_user2 = user2.clone();
-
-    // Attempt to update email to one already taken
-    updated_user2.email = "user1@example.com".to_string();
-    let result = service.update_user(updated_user2.clone());
-    assert!(matches!(result, Err(ExpenseServiceError::EmailInUse)));
-
-    // Update to a new unique email
-    updated_user2.email = "new_user2@example.com".to_string();
-    let updated = service.update_user(updated_user2).unwrap();
-    assert_eq!(updated.email, "new_user2@example.com");
-
-    // Drop service to access audit logs
-    drop(service);
-
-    let logs = audit_logger.get_logs();
-    assert_eq!(logs.len(), 3);
-    assert_eq!(logs[2].action, crate::models::AuditAction::UpdateUser);
+#[tokio::test]
+async fn test_duplicate_email() {
+    let storage = InMemoryStorage::new();
+    let logging = InMemoryLogging::new();
+    let splitwise = SplitwiseService::new(storage, logging);
+    let user1 = User {
+        id: "u1".to_string(),
+        name: "Alice".to_string(),
+        email: "alice@example.com".to_string(),
+        username: "alice123".to_string(),
+    };
+    let user2 = User {
+        id: "u2".to_string(),
+        name: "Bob".to_string(),
+        email: "alice@example.com".to_string(),
+        username: "bob456".to_string(),
+    };
+    splitwise.add_user(user1, None).await.unwrap();
+    let result = splitwise.add_user(user2, None).await;
+    assert!(matches!(
+        result,
+        Err(SplitwiseError::EmailAlreadyRegistered(_))
+    ));
 }
