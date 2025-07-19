@@ -1,42 +1,49 @@
-use std::fmt;
+use thiserror::Error;
 
-#[derive(Debug)]
-pub enum ExpenseServiceError {
-    UserNotFound,
-    GroupNotFound,
-    TransactionNotFound,
-    EmailInUse,
-    NotGroupMember,
-    NotAuthorized,
-    InvalidSplit,
-    AlreadyDeleted,
+#[derive(Error, Debug)]
+pub enum SplitwiseError {
+    #[error("Email is required")]
+    MissingEmail,
+    #[error("Email {0} already registered")]
+    EmailAlreadyRegistered(String),
+    #[error("User {0} not found")]
+    UserNotFound(String),
+    #[error("Group {0} not found")]
+    GroupNotFound(String),
+    #[error("User {0} is already a group member")]
+    AlreadyGroupMember(String),
+    #[error("User {0} is not a group member")]
+    NotGroupMember(String),
+    #[error("User {0} is not group owner")]
+    NotGroupOwner(String),
+    #[error("Invalid owner count: {0}")]
+    InvalidOwnerCount(usize),
+    #[error("Owner cannot remove themselves")]
+    OwnerCannotRemoveSelf,
+    #[error("Cannot remove last group member")]
+    CannotRemoveLastMember,
+    #[error("Invalid join link")]
     InvalidJoinLink,
-    UserAlreadyInGroup,
-    GroupAlreadyExists,
-    TransactionAlreadyExists,
-    UserAlreadyExists,
-    NoBalancesAvailable,
+    #[error("Join link not found")]
+    JoinLinkNotFound,
+    #[error("Invalid split amounts")]
+    InvalidSplit,
+    #[error("User {0} is not a group member for split")]
+    InvalidSplitUser(String),
+    #[error("Transaction {0} not found")]
+    TransactionNotFound(String),
+    #[error("Cannot create settlement to self")]
+    SelfSettlement,
+    #[error("Settlement amount must be positive")]
+    InvalidSettlementAmount,
+    #[error("Invalid transaction {0} for settlement")]
+    InvalidSettlementTransaction(String),
+    #[error("Settlement {0} not found")]
+    SettlementNotFound(String),
+    #[error("Settlement {0} already confirmed")]
+    SettlementAlreadyConfirmed(String),
+    #[error("User {0} not authorized to confirm settlement")]
+    UnauthorizedSettlementConfirmation(String),
+    #[error("Transaction {0} already reversed")]
+    TransactionAlreadyReversed(String),
 }
-
-impl fmt::Display for ExpenseServiceError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::UserNotFound => write!(f, "User not found"),
-            Self::GroupNotFound => write!(f, "Group not found"),
-            Self::TransactionNotFound => write!(f, "Transaction not found"),
-            Self::EmailInUse => write!(f, "Email already in use"),
-            Self::NotGroupMember => write!(f, "User not in group"),
-            Self::NotAuthorized => write!(f, "User not authorized"),
-            Self::InvalidSplit => write!(f, "Invalid split configuration"),
-            Self::AlreadyDeleted => write!(f, "Transaction already deleted"),
-            Self::InvalidJoinLink => write!(f, "Invalid join link"),
-            Self::UserAlreadyInGroup => write!(f, "User already in group"),
-            Self::GroupAlreadyExists => write!(f, "Group already exists"),
-            Self::TransactionAlreadyExists => write!(f, "Transaction already exists"),
-            Self::UserAlreadyExists => write!(f, "User already exists"),
-            Self::NoBalancesAvailable => write!(f, "No balances available"),
-        }
-    }
-}
-
-impl std::error::Error for ExpenseServiceError {}
