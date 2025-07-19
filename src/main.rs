@@ -1,5 +1,3 @@
-// src/main.rs
-
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -8,7 +6,6 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use splitwise::error::SplitwiseError;
 use splitwise::logger::in_memory::InMemoryLogging;
 use splitwise::models::{
     audit::{AppLog, GroupAudit},
@@ -20,6 +17,7 @@ use splitwise::models::{
 };
 use splitwise::service::SplitwiseService;
 use splitwise::storage::in_memory::InMemoryStorage;
+use splitwise::{config::CONFIG, error::SplitwiseError};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -101,7 +99,7 @@ struct AddExpenseRequest {
     description: String,
     amount: f64,
     paid_by_id: String,
-    splits: HashMap<String, f64>,
+    shares: HashMap<String, f64>,
     created_by_id: String,
 }
 
@@ -457,7 +455,7 @@ async fn add_expense(
             req.description,
             req.amount,
             paid_by,
-            req.splits,
+            req.shares,
             &created_by,
         )
         .await?;

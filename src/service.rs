@@ -391,7 +391,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         description: String,
         amount: f64,
         paid_by: User,
-        splits: HashMap<String, f64>,
+        shares: HashMap<String, f64>,
         created_by: &User,
     ) -> Result<Transaction, SplitwiseError> {
         let group = self.get_group(group_id).await?;
@@ -400,10 +400,10 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
         if !group.members.iter().any(|m| m.user.id == created_by.id) {
             return Err(SplitwiseError::NotGroupMember(created_by.id.clone()));
         }
-        if !self.is_valid_split(amount, &splits) {
+        if !self.is_valid_split(amount, &shares) {
             return Err(SplitwiseError::InvalidSplit);
         }
-        for user_id in splits.keys() {
+        for user_id in shares.keys() {
             if !group.members.iter().any(|m| &m.user.id == user_id) {
                 return Err(SplitwiseError::InvalidSplitUser(user_id.clone()));
             }
@@ -414,7 +414,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             description,
             amount,
             paid_by,
-            splits,
+            shares,
             timestamp: Utc::now(),
             is_reversed: false,
             reverses: None,
@@ -458,7 +458,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             ));
         }
         let mut reversal_splits = HashMap::new();
-        for (user_id, amount) in &original.splits {
+        for (user_id, amount) in &original.shares {
             reversal_splits.insert(user_id.clone(), -amount);
         }
         let reversal = Transaction {
@@ -467,7 +467,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             description: format!("Reversal of: {}", original.description),
             amount: -original.amount,
             paid_by: original.paid_by.clone(),
-            splits: reversal_splits,
+            shares: reversal_splits,
             timestamp: Utc::now(),
             is_reversed: false,
             reverses: Some(transaction_id.to_string()),
@@ -739,7 +739,7 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
     }
 
     async fn update_balances(&self, transaction: &Transaction) -> Result<(), SplitwiseError> {
-        for (user_id, amount) in &transaction.splits {
+        for (user_id, amount) in &transaction.shares {
             if user_id != &transaction.paid_by.id {
                 self.storage
                     .save_balance(user_id, &transaction.paid_by.id, *amount)
@@ -750,11 +750,6 @@ impl<L: LoggingService, S: Storage> SplitwiseService<L, S> {
             }
         }
         Ok(())
-    }
-
-    fn is_valid_split(&self, amount: f64, splits: &HashMap<String, f64>) -> bool {
-        let total: f64 = splits.values().copied().sum();
-        (total - amount).abs() < f64::EPSILON * amount.max(1.0)
     }
 
     pub async fn get_group_members(

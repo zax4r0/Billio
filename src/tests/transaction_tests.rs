@@ -33,14 +33,14 @@ async fn test_add_expense_and_settlement() {
         )
         .await
         .unwrap();
-    let splits = HashMap::from([("u2".to_string(), 100.0)]);
+    let shares = HashMap::from([("u2".to_string(), 100.0)]);
     let tx = splitwise
         .add_expense(
             &group.id,
             "Dinner".to_string(),
             100.0,
             user1.clone(),
-            splits,
+            shares,
             &user1,
         )
         .await

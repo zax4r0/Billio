@@ -9,7 +9,7 @@ pub struct Transaction {
     pub description: String,
     pub amount: f64,
     pub paid_by: User,
-    pub splits: HashMap<String, f64>,
+    pub shares: HashMap<String, f64>,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub is_reversed: bool,
     pub reverses: Option<String>,
