@@ -1,8 +1,12 @@
-use crate::cache::in_memory_cache::Cache;
-use crate::constants::*;
-use crate::error::{BillioError, FieldError};
-use crate::logger::LoggingService;
-use crate::models::{
+use crate::auth::jwt::{Claims, JwtService};
+use crate::constants::constants::{
+    BALANCE_QUERIED, EXPENSE_ADDED, GROUP_CREATED, GROUP_DELETED, JOIN_LINK_REGENERATED, JOIN_LINK_REVOKED,
+    MEMBER_ADDED, MEMBER_JOINED, MEMBER_REMOVED, OWNERSHIP_TRANSFERRED, PENDING_SETTLEMENTS_QUERIED,
+    SETTLEMENT_CONFIRMED, SETTLEMENT_CREATED, STRICT_SETTLEMENT_MODE_TOGGLED, TRANSACTION_REVERSED,
+    TRANSACTIONS_QUERIED, USER_ADDED,
+};
+use crate::core::errors::{BillioError, FieldError};
+use crate::core::models::{
     audit::{AppLog, GroupAudit},
     group::{Group, GroupMember, Role},
     settlement::Settlement,
@@ -10,7 +14,9 @@ use crate::models::{
     transaction_split::Balance,
     user::User,
 };
-use crate::storage::Storage;
+use crate::infrastructure::cache::Cache;
+use crate::infrastructure::logging::LoggingService;
+use crate::infrastructure::storage::Storage;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,7 +24,7 @@ use std::collections::HashMap;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, ToSchema)]
+#[derive(Serialize, Deserialize, Debug, ToSchema, Clone)]
 pub struct UserBalancesResponse {
     circular_balances: Vec<Balance>,
     minimized_balances: Vec<Balance>,
@@ -38,19 +44,24 @@ pub struct BillioService<L: LoggingService, S: Storage, C: Cache> {
     storage: S,
     logging: L,
     cache: C,
+    jwt_service: JwtService, // Added for JWT
 }
 
 impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
-    pub fn new(storage: S, logging: L, cache: C) -> Self {
+    pub fn new(storage: S, logging: L, cache: C, jwt_secret: String) -> Self {
         BillioService {
             storage,
             logging,
             cache,
+            jwt_service: JwtService::new(jwt_secret),
         }
     }
 
-    // Helper: Validate multiple users exist
-    async fn validate_users(&self, user_ids: &[&str]) -> Result<(), BillioError> {
+    pub fn validate_token(&self, token: &str) -> Result<Claims, BillioError> {
+        self.jwt_service.validate_token(token)
+    }
+
+    pub async fn validate_users(&self, user_ids: &[&str]) -> Result<(), BillioError> {
         for &user_id in user_ids {
             if self.storage.get_user(user_id).await?.is_none() {
                 return Err(BillioError::UserNotFound(user_id.to_string()));
@@ -59,7 +70,6 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         Ok(())
     }
 
-    // Helper: Validate group exists and user is owner
     async fn validate_group_and_owner(&self, group_id: &str, owner_id: &str) -> Result<Group, BillioError> {
         let group = self
             .storage
@@ -76,7 +86,6 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         Ok(group)
     }
 
-    // Helper: Validate user is a group member
     async fn validate_group_membership(&self, group_id: &str, user_id: &str) -> Result<Group, BillioError> {
         let group = self
             .storage
@@ -89,7 +98,6 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         Ok(group)
     }
 
-    // Helper: Combine logging and auditing
     async fn log_and_audit(
         &self,
         group_id: Option<&str>,
@@ -113,7 +121,6 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         Ok(())
     }
 
-    // Helper: Validate string input (e.g., name, description, remarks)
     fn validate_string_input(&self, field: &str, value: &str, max_length: usize) -> Result<(), BillioError> {
         if value.trim().is_empty() {
             return Err(BillioError::InvalidInput(
@@ -135,7 +142,6 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
                 },
             ));
         }
-        // Sanitize: reject control characters or potentially harmful characters
         if value.chars().any(|c| c.is_control() || "<>{}[]".contains(c)) {
             return Err(BillioError::InvalidInput(
                 field.to_string(),
@@ -149,7 +155,6 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         Ok(())
     }
 
-    // Helper: Validate amount input (e.g., transaction or settlement amount)
     fn validate_amount_input(&self, field: &str, amount: f64) -> Result<(), BillioError> {
         if amount <= 0.0 {
             return Err(BillioError::InvalidInput(
@@ -194,20 +199,47 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         Ok(())
     }
 
+    pub async fn authenticate(&self, email: &str, password: &str) -> Result<String, BillioError> {
+        let user = self
+            .storage
+            .get_user_by_email(email)
+            .await?
+            .ok_or(BillioError::InvalidCredentials)?;
+
+        if bcrypt::verify(password, &user.password)
+            .map_err(|e| BillioError::InternalServerError(format!("Password verification error: {}", e)))?
+        {
+            // Assume all users have "USER" role for simplicity; extend with roles if needed
+            self.jwt_service
+                .generate_token(&user.id, "USER")
+                .map_err(|e| BillioError::InternalServerError(format!("Token generation error: {}", e)))
+        } else {
+            Err(BillioError::InvalidCredentials)
+        }
+    }
+
     pub async fn get_user(&self, user_id: &str) -> Result<Option<User>, BillioError> {
         self.storage.get_user(user_id).await
     }
 
     pub async fn add_user(&self, user: User, created_by: Option<&User>) -> Result<User, BillioError> {
-        // Enhanced email validation
         if user.email.is_empty() {
             return Err(BillioError::MissingEmail);
         }
         if !user.email.contains('@') || !user.email.contains('.') || user.email.len() < 5 {
             return Err(BillioError::InvalidEmail(user.email.clone()));
         }
+        if user.password.is_empty() {
+            return Err(BillioError::InvalidInput(
+                "password".to_string(),
+                FieldError {
+                    field: "password".to_string(),
+                    title: "Invalid password".to_string(),
+                    description: "Password cannot be empty".to_string(),
+                },
+            ));
+        }
 
-        // Name validation
         self.validate_string_input("name", &user.name, 100)?;
 
         let new_user = self.storage.create_user_if_not_exists(user.clone()).await?;
@@ -234,13 +266,11 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         self.validate_users(&[&created_by.id]).await?;
         self.validate_string_input("name", &name, 100)?;
 
-        // Ensure created_by is included in members list
         let mut all_members = members;
         if !all_members.iter().any(|m| m.id == created_by.id) {
             all_members.push(created_by.clone());
         }
 
-        // Validate all members exist
         self.validate_users(&all_members.iter().map(|m| m.id.as_str()).collect::<Vec<_>>())
             .await?;
 
@@ -522,22 +552,16 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
     ) -> Result<Transaction, BillioError> {
         let group = self.validate_group_membership(group_id, &created_by.id).await?;
         self.validate_users(&[&paid_by.id]).await?;
-        self.validate_string_input("description", &description, 500)?;
-        self.validate_amount_input("amount", amount)?;
-
         if !group.members.iter().any(|m| m.user.id == paid_by.id) {
             return Err(BillioError::NotGroupMember(paid_by.id.clone()));
         }
 
-        if !self.is_valid_split(amount, &shares) {
-            return Err(BillioError::InvalidInput(
-                "shares".to_string(),
-                FieldError {
-                    field: "shares".to_string(),
-                    title: "Invalid Split".to_string(),
-                    description: "Sum of shares must equal the total amount".to_string(),
-                },
-            ));
+        self.validate_string_input("description", &description, 255)?;
+        self.validate_amount_input("amount", amount)?;
+
+        let share_sum: f64 = shares.values().sum();
+        if (share_sum - amount).abs() > 0.01 {
+            return Err(BillioError::InvalidSplit);
         }
 
         for user_id in shares.keys() {
@@ -546,10 +570,11 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
             }
         }
 
+        let transaction_id = Uuid::new_v4().to_string();
         let transaction = Transaction {
-            id: Uuid::new_v4().to_string(),
+            id: transaction_id.clone(),
             group_id: group_id.to_string(),
-            description: description.trim().to_string(),
+            description,
             amount,
             paid_by,
             shares,
@@ -560,14 +585,7 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         };
 
         self.storage.save_transaction(transaction.clone()).await?;
-
-        // Invalidate cache for affected users (uses USER_BALANCES_KEY format)
-        for user_id in transaction.shares.keys() {
-            let cache_key = format!("balances:{}", user_id);
-            self.cache.del(&cache_key).await?;
-        }
-        let cache_key = format!("balances:{}", transaction.paid_by.id);
-        self.cache.del(&cache_key).await?;
+        self.cache.invalidate_user_balances(&transaction.group_id).await?;
 
         self.log_and_audit(
             Some(group_id),
@@ -586,70 +604,62 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         Ok(transaction)
     }
 
-    pub async fn get_transaction(&self, transaction_id: &str) -> Result<Option<Transaction>, BillioError> {
-        self.storage.get_transaction(transaction_id).await
-    }
-
     pub async fn reverse_transaction(
         &self,
         transaction_id: &str,
         reversed_by: &User,
     ) -> Result<Transaction, BillioError> {
-        let original = self
+        let _group = self
+            .validate_group_membership(
+                &self
+                    .storage
+                    .get_transaction(transaction_id)
+                    .await?
+                    .ok_or_else(|| BillioError::TransactionNotFound(transaction_id.to_string()))?
+                    .group_id,
+                &reversed_by.id,
+            )
+            .await?;
+
+        let mut transaction = self
             .storage
             .get_transaction(transaction_id)
             .await?
             .ok_or_else(|| BillioError::TransactionNotFound(transaction_id.to_string()))?;
 
-        self.validate_users(&[&reversed_by.id]).await?;
-        let _group = self
-            .validate_group_membership(&original.group_id, &reversed_by.id)
-            .await?;
-
-        if original.reversed_by.is_some() {
+        if transaction.is_reversed {
             return Err(BillioError::TransactionAlreadyReversed(transaction_id.to_string()));
         }
 
-        let mut reversal_shares = HashMap::new();
-        for (user_id, amount) in &original.shares {
-            reversal_shares.insert(user_id.clone(), -amount);
-        }
-
-        let original_group_id = original.group_id.clone();
+        let reversal_id = Uuid::new_v4().to_string();
         let reversal = Transaction {
-            id: Uuid::new_v4().to_string(),
-            group_id: original_group_id.clone(),
-            description: format!("Reversal of: {}", original.description),
-            amount: -original.amount,
-            paid_by: original.paid_by.clone(),
-            shares: reversal_shares,
+            id: reversal_id.clone(),
+            group_id: transaction.group_id.clone(),
+            description: format!("Reversal of {}", transaction.description),
+            amount: -transaction.amount,
+            paid_by: transaction.paid_by.clone(),
+            shares: transaction.shares.iter().map(|(k, v)| (k.clone(), -v)).collect(),
             timestamp: Utc::now(),
             is_reversed: false,
             reverses: Some(transaction_id.to_string()),
-            reversed_by: None,
+            reversed_by: Some(reversed_by.id.clone()),
         };
 
-        let updated_original = Transaction {
-            is_reversed: true,
-            reversed_by: Some(reversal.id.clone()),
-            ..original
-        };
+        transaction.is_reversed = true;
+        transaction.reversed_by = Some(reversed_by.id.clone());
 
-        self.storage.save_transaction(updated_original).await?;
         self.storage.save_transaction(reversal.clone()).await?;
-
-        // Invalidate cache for affected users (uses USER_BALANCES_KEY format)
-        for user_id in reversal.shares.keys() {
-            let cache_key = format!("balances:{}", user_id);
-            self.cache.del(&cache_key).await?;
-        }
-        let cache_key = format!("balances:{}", reversal.paid_by.id);
-        self.cache.del(&cache_key).await?;
+        self.storage.save_transaction(transaction).await?;
+        self.cache.invalidate_user_balances(&reversal.group_id).await?;
 
         self.log_and_audit(
-            Some(&original_group_id),
+            Some(&reversal.group_id),
             TRANSACTION_REVERSED,
-            json!({ "transaction_id": transaction_id, "reversal_id": reversal.id }),
+            json!({
+                "transaction_id": transaction_id,
+                "reversal_id": reversal.id,
+                "group_id": reversal.group_id
+            }),
             Some(reversed_by.id.as_str()),
         )
         .await?;
@@ -674,49 +684,53 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
             return Err(BillioError::SelfSettlement);
         }
 
-        self.validate_amount_input("amount", amount)?;
-
-        if let Some(ref remarks_text) = remarks {
-            self.validate_string_input("remarks", remarks_text, 500)?;
+        if !group.members.iter().any(|m| m.user.id == from_user.id)
+            || !group.members.iter().any(|m| m.user.id == to_user.id)
+        {
+            return Err(BillioError::NotGroupMember(
+                if !group.members.iter().any(|m| m.user.id == from_user.id) {
+                    from_user.id.clone()
+                } else {
+                    to_user.id.clone()
+                },
+            ));
         }
 
-        if let Some(tx_ids) = &transaction_ids {
-            for tx_id in tx_ids {
-                let tx = self
+        self.validate_amount_input("amount", amount)?;
+
+        if let Some(ref tids) = transaction_ids {
+            for tid in tids {
+                let transaction = self
                     .storage
-                    .get_transaction(tx_id)
+                    .get_transaction(tid)
                     .await?
-                    .ok_or_else(|| BillioError::InvalidSettlementTransaction(tx_id.clone()))?;
-                if tx.group_id != group_id {
-                    return Err(BillioError::InvalidSettlementTransaction(tx_id.clone()));
+                    .ok_or_else(|| BillioError::InvalidSettlementTransaction(tid.clone()))?;
+                if transaction.group_id != group_id {
+                    return Err(BillioError::InvalidSettlementTransaction(tid.clone()));
                 }
             }
         }
 
+        let settlement_id = Uuid::new_v4().to_string();
         let settlement = Settlement {
-            id: Uuid::new_v4().to_string(),
+            id: settlement_id.clone(),
             group_id: group_id.to_string(),
             from_user_id: from_user.id.clone(),
             to_user_id: to_user.id.clone(),
             amount,
-            remarks: remarks.map(|r| r.trim().to_string()),
+            remarks,
             transaction_ids,
             timestamp: Utc::now(),
             is_confirmed: !group.strict_settlement_mode,
-            confirmed_by: if group.strict_settlement_mode {
-                None
+            confirmed_by: if !group.strict_settlement_mode {
+                Some(created_by.id.clone())
             } else {
-                Some(to_user.id.clone())
+                None
             },
         };
 
         self.storage.save_settlement(settlement.clone()).await?;
-
-        // Invalidate cache for affected users (uses USER_BALANCES_KEY format)
-        let cache_key_from = format!("balances:{}", from_user.id);
-        let cache_key_to = format!("balances:{}", to_user.id);
-        self.cache.del(&cache_key_from).await?;
-        self.cache.del(&cache_key_to).await?;
+        self.cache.invalidate_user_balances(group_id).await?;
 
         self.log_and_audit(
             Some(group_id),
@@ -726,10 +740,7 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
                 "group_id": group_id,
                 "from_user_id": from_user.id,
                 "to_user_id": to_user.id,
-                "amount": amount,
-                "remarks": settlement.remarks,
-                "transaction_ids": settlement.transaction_ids,
-                "is_strict": group.strict_settlement_mode
+                "amount": amount
             }),
             Some(created_by.id.as_str()),
         )
@@ -739,7 +750,6 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
     }
 
     pub async fn confirm_settlement(&self, settlement_id: &str, confirmed_by: &User) -> Result<(), BillioError> {
-        self.validate_users(&[&confirmed_by.id]).await?;
         let mut settlement = self
             .storage
             .get_settlement(settlement_id)
@@ -749,176 +759,48 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         if settlement.is_confirmed {
             return Err(BillioError::SettlementAlreadyConfirmed(settlement_id.to_string()));
         }
-        if settlement.to_user_id != confirmed_by.id {
+
+        let group = self
+            .storage
+            .get_group(&settlement.group_id)
+            .await?
+            .ok_or_else(|| BillioError::GroupNotFound(settlement.group_id.clone()))?;
+
+        if !group.strict_settlement_mode {
+            return Err(BillioError::SettlementAlreadyConfirmed(settlement_id.to_string()));
+        }
+
+        if confirmed_by.id != settlement.to_user_id {
             return Err(BillioError::UnauthorizedSettlementConfirmation(confirmed_by.id.clone()));
         }
 
         settlement.is_confirmed = true;
         settlement.confirmed_by = Some(confirmed_by.id.clone());
         self.storage.save_settlement(settlement.clone()).await?;
-
-        // Invalidate cache for affected users (uses USER_BALANCES_KEY format)
-        let cache_key_from = format!("balances:{}", settlement.from_user_id);
-        let cache_key_to = format!("balances:{}", settlement.to_user_id);
-        self.cache.del(&cache_key_from).await?;
-        self.cache.del(&cache_key_to).await?;
+        self.cache.invalidate_user_balances(&settlement.group_id).await?;
 
         self.log_and_audit(
             Some(&settlement.group_id),
             SETTLEMENT_CONFIRMED,
-            json!({ "settlement_id": settlement_id, "from_user_id": settlement.from_user_id, "to_user_id": settlement.to_user_id }),
+            json!({ "settlement_id": settlement.id, "group_id": settlement.group_id }),
             Some(confirmed_by.id.as_str()),
         )
         .await?;
+
         Ok(())
     }
 
     pub async fn get_pending_settlements(&self, group_id: &str, user: &User) -> Result<Vec<Settlement>, BillioError> {
         let _group = self.validate_group_membership(group_id, &user.id).await?;
-        let settlements = self.storage.get_pending_settlements(group_id, &user.id).await?;
-
+        let settlements = self.storage.get_pending_settlements(group_id).await?;
         self.log_and_audit(
             Some(group_id),
             PENDING_SETTLEMENTS_QUERIED,
-            json!({ "group_id": group_id, "user_id": user.id, "count": settlements.len() }),
+            json!({ "group_id": group_id, "user_id": user.id }),
             Some(user.id.as_str()),
         )
         .await?;
         Ok(settlements)
-    }
-
-    pub async fn get_user_balances(
-        &self,
-        user_id: &str,
-        queried_by: &User,
-    ) -> Result<UserBalancesResponse, BillioError> {
-        // Check cache first (uses USER_BALANCES_KEY format)
-        let cache_key = format!("balances:{}", user_id);
-        if let Some(cached) = self.cache.get::<UserBalancesResponse>(&cache_key).await? {
-            return Ok(cached);
-        }
-
-        self.validate_users(&[user_id, &queried_by.id]).await?;
-
-        let transactions = self.storage.get_transactions_by_user(user_id).await?;
-        let settlements = self.storage.get_settlements_by_user(user_id).await?;
-        let mut balances: HashMap<String, f64> = HashMap::new();
-
-        // Process transactions - only non-reversed ones
-        for tx in transactions.iter().filter(|t| !t.is_reversed) {
-            // If user is in the split, they owe money to the payer
-            if let Some(amount) = tx.shares.get(user_id) {
-                if tx.paid_by.id != user_id {
-                    *balances.entry(tx.paid_by.id.clone()).or_insert(0.0) += amount;
-                }
-            }
-
-            // If user paid, others owe them
-            if tx.paid_by.id == user_id {
-                for (uid, amount) in &tx.shares {
-                    if uid != user_id {
-                        *balances.entry(uid.clone()).or_insert(0.0) -= amount;
-                    }
-                }
-            }
-        }
-
-        // Process confirmed settlements
-        for settlement in settlements.iter().filter(|s| s.is_confirmed) {
-            if settlement.from_user_id == user_id {
-                // User paid someone - reduces what they owe them
-                *balances.entry(settlement.to_user_id.clone()).or_insert(0.0) -= settlement.amount;
-            } else if settlement.to_user_id == user_id {
-                // User received payment - reduces what someone owes them
-                *balances.entry(settlement.from_user_id.clone()).or_insert(0.0) += settlement.amount;
-            }
-        }
-
-        // Convert to Balance objects, filtering negligible amounts
-        let circular_balances = balances
-            .into_iter()
-            .filter(|(_, amount)| amount.abs() >= 0.01)
-            .map(|(owes_to, amount)| Balance {
-                user_id: user_id.to_string(),
-                owes_to: owes_to.clone(),
-                amount,
-            })
-            .collect::<Vec<Balance>>();
-
-        // Minimize debts
-        let minimized_balances = self.minimize_debts_for_user(user_id, &circular_balances);
-
-        // Cache results for future queries (uses USER_BALANCES_KEY format)
-        let response = UserBalancesResponse {
-            circular_balances: circular_balances.clone(),
-            minimized_balances: minimized_balances.clone(),
-        };
-        self.cache.set(&cache_key, &response, Some(3600)).await?;
-
-        self.log_and_audit(
-            None,
-            BALANCE_QUERIED,
-            json!({
-                "user_id": user_id,
-                "circular_count": circular_balances.len(),
-                "minimized_count": minimized_balances.len()
-            }),
-            Some(queried_by.id.as_str()),
-        )
-        .await?;
-
-        Ok(response)
-    }
-
-    fn minimize_debts_for_user(&self, user_id: &str, balances: &[Balance]) -> Vec<Balance> {
-        let mut result = balances.to_vec();
-        let mut modified = true;
-
-        // Perform pairwise debt reduction until no further reductions are possible
-        while modified {
-            modified = false;
-            for i in 0..result.len() {
-                for j in 0..result.len() {
-                    if i == j {
-                        continue;
-                    }
-                    // Corrected circular debt detection:
-                    // user_id owes A (i), and A owes user_id (j)
-                    if result[i].user_id == user_id
-                        && result[i].owes_to != user_id
-                        && result[j].user_id == result[i].owes_to
-                        && result[j].owes_to == user_id
-                    {
-                        let amount_i = result[i].amount;
-                        let amount_j = result[j].amount;
-                        if amount_i > 0.01 && amount_j > 0.01 {
-                            let reduction = amount_i.min(amount_j);
-                            result[i].amount -= reduction;
-                            result[j].amount -= reduction;
-                            modified = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Filter out negligible amounts
-        result.into_iter().filter(|b| b.amount.abs() >= 0.01).collect()
-    }
-
-    fn is_valid_split(&self, amount: f64, shares: &HashMap<String, f64>) -> bool {
-        if shares.is_empty() {
-            return false;
-        }
-        for share in shares.values() {
-            if *share < 0.0 || !share.is_finite() {
-                return false;
-            }
-        }
-        let total: f64 = shares.values().sum();
-        let rounded_amount = (amount * 100.0).round() / 100.0;
-        let rounded_total = (total * 100.0).round() / 100.0;
-        (rounded_total - rounded_amount).abs() < 0.005
     }
 
     pub async fn get_effective_transactions(
@@ -927,46 +809,161 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
         queried_by: &User,
     ) -> Result<Vec<Transaction>, BillioError> {
         let _group = self.validate_group_membership(group_id, &queried_by.id).await?;
-        let transactions: Vec<Transaction> = self
-            .storage
-            .get_transactions_by_group(group_id)
-            .await?
-            .into_iter()
-            .filter(|tx| !tx.is_reversed)
-            .collect();
-
+        let transactions = self.storage.get_effective_transactions(group_id).await?;
         self.log_and_audit(
             Some(group_id),
             TRANSACTIONS_QUERIED,
-            json!({ "group_id": group_id, "transactions_count": transactions.len() }),
+            json!({ "group_id": group_id, "user_id": queried_by.id }),
             Some(queried_by.id.as_str()),
         )
         .await?;
         Ok(transactions)
     }
 
-    pub async fn get_app_logs(&self) -> Result<Vec<AppLog>, BillioError> {
-        self.logging.get_logs().await
+    pub async fn get_user_balances(
+        &self,
+        user_id: &str,
+        queried_by: &User,
+    ) -> Result<UserBalancesResponse, BillioError> {
+        self.validate_users(&[user_id, &queried_by.id]).await?;
+
+        let cached = self.cache.get_user_balances(user_id).await?;
+        if let Some(balances) = cached {
+            return Ok(balances);
+        }
+
+        let mut balances: HashMap<(String, String), f64> = HashMap::new();
+        let groups = self.storage.get_user_groups(user_id).await?;
+
+        for group in groups {
+            let transactions = self.storage.get_effective_transactions(&group.id).await?;
+            for transaction in transactions {
+                let paid_by_id = transaction.paid_by.id.clone();
+                for (owes_id, amount) in &transaction.shares {
+                    if paid_by_id != *owes_id {
+                        let key = if paid_by_id < *owes_id {
+                            (paid_by_id.clone(), owes_id.clone())
+                        } else {
+                            (owes_id.clone(), paid_by_id.clone())
+                        };
+                        let entry = balances.entry(key).or_insert(0.0);
+                        if paid_by_id == user_id {
+                            *entry += amount;
+                        } else if owes_id == user_id {
+                            *entry -= amount;
+                        }
+                    }
+                }
+            }
+
+            let settlements = self.storage.get_settlements(&group.id).await?;
+            for settlement in settlements {
+                if !settlement.is_confirmed {
+                    continue;
+                }
+                let key = if settlement.from_user_id < settlement.to_user_id {
+                    (settlement.from_user_id.clone(), settlement.to_user_id.clone())
+                } else {
+                    (settlement.to_user_id.clone(), settlement.from_user_id.clone())
+                };
+                let entry = balances.entry(key).or_insert(0.0);
+                if settlement.from_user_id == user_id {
+                    *entry -= settlement.amount;
+                } else if settlement.to_user_id == user_id {
+                    *entry += settlement.amount;
+                }
+            }
+        }
+
+        let circular_balances = balances
+            .into_iter()
+            .filter(|((from, to), amount)| *amount != 0.0 && (from == user_id || to == user_id))
+            .map(|((from, to), amount)| {
+                let from_clone = from.clone();
+                let to_clone = to.clone();
+                Balance {
+                    user_id: if from_clone == user_id {
+                        from_clone.clone()
+                    } else {
+                        to_clone.clone()
+                    },
+                    owes_to: if from_clone == user_id { to_clone } else { from_clone },
+                    amount: amount.abs(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let minimized_balances = self.minimize_balances(circular_balances.clone());
+
+        let response = UserBalancesResponse {
+            circular_balances,
+            minimized_balances,
+        };
+
+        self.cache
+            .save_user_balances(user_id, &response, std::time::Duration::from_secs(3600))
+            .await?;
+
+        self.log_and_audit(
+            None,
+            BALANCE_QUERIED,
+            json!({ "user_id": user_id, "queried_by": queried_by.id }),
+            Some(queried_by.id.as_str()),
+        )
+        .await?;
+
+        Ok(response)
     }
 
-    pub async fn get_group_audits(&self, group_id: &str) -> Result<Vec<GroupAudit>, BillioError> {
-        self.storage.get_group_audits(group_id).await
-    }
+    fn minimize_balances(&self, balances: Vec<Balance>) -> Vec<Balance> {
+        let mut net_balances: HashMap<String, f64> = HashMap::new();
+        for balance in balances {
+            *net_balances.entry(balance.user_id.clone()).or_insert(0.0) -= balance.amount;
+            *net_balances.entry(balance.owes_to.clone()).or_insert(0.0) += balance.amount;
+        }
 
-    pub async fn get_group_members(&self, group_id: &str) -> Result<Vec<GroupMember>, BillioError> {
-        let group = self
-            .storage
-            .get_group(group_id)
-            .await?
-            .ok_or_else(|| BillioError::GroupNotFound(group_id.to_string()))?;
-        Ok(group.members.clone())
-    }
+        let mut positive: Vec<(String, f64)> = net_balances
+            .iter()
+            .filter(|(_, amount)| **amount > 0.01)
+            .map(|(id, amount)| (id.clone(), *amount))
+            .collect();
+        let mut negative: Vec<(String, f64)> = net_balances
+            .iter()
+            .filter(|(_, amount)| **amount < -0.01)
+            .map(|(id, amount)| (id.clone(), *amount))
+            .collect();
 
-    pub async fn get_group(&self, group_id: &str) -> Result<Group, BillioError> {
-        self.storage
-            .get_group(group_id)
-            .await?
-            .ok_or_else(|| BillioError::GroupNotFound(group_id.to_string()))
+        positive.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        negative.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        let mut minimized = Vec::new();
+        while !positive.is_empty() && !negative.is_empty() {
+            let (creditor, credit) = positive[0].clone();
+            let (debtor, debit) = negative[0].clone();
+            let amount = credit.min(-debit);
+
+            if amount > 0.01 {
+                minimized.push(Balance {
+                    user_id: debtor.clone(),
+                    owes_to: creditor.clone(),
+                    amount,
+                });
+            }
+
+            positive[0].1 -= amount;
+            negative[0].1 += amount;
+
+            if positive[0].1 < 0.01 {
+                positive.remove(0);
+            }
+            if negative[0].1 > -0.01 {
+                negative.remove(0);
+            }
+            positive.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            negative.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        }
+
+        minimized
     }
 
     fn validate_group_roles(&self, group: &Group) -> Result<(), BillioError> {
@@ -975,5 +972,21 @@ impl<L: LoggingService, S: Storage, C: Cache> BillioService<L, S, C> {
             return Err(BillioError::InvalidOwnerCount(owner_count));
         }
         Ok(())
+    }
+
+    pub async fn get_group_audits(&self, group_id: &str) -> Result<Vec<GroupAudit>, BillioError> {
+        self.storage
+            .get_group(group_id)
+            .await?
+            .ok_or_else(|| BillioError::GroupNotFound(group_id.to_string()))?;
+        self.storage.get_group_audits(group_id).await
+    }
+
+    pub async fn get_app_logs(&self) -> Result<Vec<AppLog>, BillioError> {
+        self.logging.get_logs().await
+    }
+
+    pub async fn get_group(&self, group_id: &str) -> Result<Option<Group>, BillioError> {
+        self.storage.get_group(group_id).await
     }
 }

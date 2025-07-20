@@ -1,12 +1,9 @@
+pub mod api;
+pub mod auth;
 pub mod config;
-
-pub mod cache;
 pub mod constants;
-pub mod error;
-pub mod logger;
-pub mod models;
-pub mod service;
-pub mod storage;
+pub mod core;
+pub mod infrastructure;
 
 #[cfg(test)]
 mod tests;

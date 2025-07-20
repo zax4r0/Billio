@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
-#[serde(rename_all = "UPPERCASE")] // Ensures JSON uses "OWNER" / "MEMBER"
+#[serde(rename_all = "UPPERCASE")]
 pub enum Role {
     Owner,
     Member,

@@ -1,18 +1,20 @@
-use crate::error::BillioError;
-use crate::logger::LoggingService;
-use crate::models::audit::AppLog;
+use crate::core::errors::BillioError;
+use crate::core::models::audit::AppLog;
+use crate::infrastructure::logging::LoggingService;
 use async_trait::async_trait;
-use chrono::Utc;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct InMemoryLogging {
-    logs: tokio::sync::Mutex<Vec<AppLog>>,
+    logs: Arc<RwLock<Vec<AppLog>>>,
 }
 
 impl InMemoryLogging {
     pub fn new() -> Self {
         InMemoryLogging {
-            logs: tokio::sync::Mutex::new(Vec::new()),
+            logs: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
@@ -25,19 +27,20 @@ impl LoggingService for InMemoryLogging {
         details: serde_json::Value,
         user_id: Option<&str>,
     ) -> Result<(), BillioError> {
-        // For production: Use a logging queue or batch writes
-        let mut logs = self.logs.lock().await;
+        let mut logs = self.logs.write().await;
         logs.push(AppLog {
             id: Uuid::new_v4().to_string(),
             action: action.to_string(),
             user_id: user_id.map(String::from),
-            details: serde_json::from_value(details).unwrap_or_default(),
-            timestamp: Utc::now(),
+            details: serde_json::from_value(details)
+                .map_err(|e| BillioError::LoggingError(format!("Failed to serialize log details: {}", e)))?,
+            timestamp: chrono::Utc::now(),
         });
         Ok(())
     }
 
     async fn get_logs(&self) -> Result<Vec<AppLog>, BillioError> {
-        Ok(self.logs.lock().await.clone())
+        let logs = self.logs.read().await;
+        Ok(logs.clone())
     }
 }

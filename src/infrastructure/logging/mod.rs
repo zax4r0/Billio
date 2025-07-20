@@ -1,7 +1,7 @@
 pub mod in_memory;
 
-use crate::error::BillioError;
-use crate::models::audit::AppLog;
+use crate::core::errors::BillioError;
+use crate::core::models::audit::AppLog;
 use async_trait::async_trait;
 
 #[async_trait]
