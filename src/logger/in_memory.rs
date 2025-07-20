@@ -1,4 +1,4 @@
-use crate::error::SplitwiseError;
+use crate::error::BillioError;
 use crate::logger::LoggingService;
 use crate::models::audit::AppLog;
 use async_trait::async_trait;
@@ -24,7 +24,7 @@ impl LoggingService for InMemoryLogging {
         action: &str,
         details: serde_json::Value,
         user_id: Option<&str>,
-    ) -> Result<(), SplitwiseError> {
+    ) -> Result<(), BillioError> {
         // For production: Use a logging queue or batch writes
         let mut logs = self.logs.lock().await;
         logs.push(AppLog {
@@ -37,7 +37,7 @@ impl LoggingService for InMemoryLogging {
         Ok(())
     }
 
-    async fn get_logs(&self) -> Result<Vec<AppLog>, SplitwiseError> {
+    async fn get_logs(&self) -> Result<Vec<AppLog>, BillioError> {
         Ok(self.logs.lock().await.clone())
     }
 }

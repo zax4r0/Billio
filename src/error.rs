@@ -9,7 +9,7 @@ pub struct FieldError {
 }
 
 #[derive(Error, Debug, Serialize)]
-pub enum SplitwiseError {
+pub enum BillioError {
     /// Email field is empty
     #[error("Email is required")]
     MissingEmail,

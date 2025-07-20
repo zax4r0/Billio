@@ -5,10 +5,9 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use serde::{Deserialize, Serialize};
-use splitwise::service::SplitwiseService;
-use splitwise::storage::in_memory::InMemoryStorage;
-use splitwise::{
+use billio::service::BillioService;
+use billio::storage::in_memory::InMemoryStorage;
+use billio::{
     cache::in_memory_cache::InMemoryCache,
     models::{
         audit::{AppLog, GroupAudit},
@@ -18,8 +17,9 @@ use splitwise::{
         user::User,
     },
 };
-use splitwise::{config::CONFIG, error::SplitwiseError};
-use splitwise::{logger::in_memory::InMemoryLogging, service::UserBalancesResponse};
+use billio::{config::CONFIG, error::BillioError};
+use billio::{logger::in_memory::InMemoryLogging, service::UserBalancesResponse};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -158,11 +158,11 @@ struct ErrorResponse {
     error: String,
 }
 
-// Newtype wrapper for SplitwiseError to implement IntoResponse
-struct ApiError(SplitwiseError);
+// Newtype wrapper for BillioError to implement IntoResponse
+struct ApiError(BillioError);
 
-impl From<SplitwiseError> for ApiError {
-    fn from(err: SplitwiseError) -> Self {
+impl From<BillioError> for ApiError {
+    fn from(err: BillioError) -> Self {
         ApiError(err)
     }
 }
@@ -170,73 +170,69 @@ impl From<SplitwiseError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         let (status, error_message) = match self.0 {
-            SplitwiseError::MissingEmail => (StatusCode::BAD_REQUEST, "Email is required".to_string()),
-            SplitwiseError::EmailAlreadyRegistered(email) => {
+            BillioError::MissingEmail => (StatusCode::BAD_REQUEST, "Email is required".to_string()),
+            BillioError::EmailAlreadyRegistered(email) => {
                 (StatusCode::CONFLICT, format!("Email {} already registered", email))
             }
-            SplitwiseError::UserNotFound(id) => (StatusCode::NOT_FOUND, format!("User {} not found", id)),
-            SplitwiseError::GroupNotFound(id) => (StatusCode::NOT_FOUND, format!("Group {} not found", id)),
-            SplitwiseError::AlreadyGroupMember(id) => {
+            BillioError::UserNotFound(id) => (StatusCode::NOT_FOUND, format!("User {} not found", id)),
+            BillioError::GroupNotFound(id) => (StatusCode::NOT_FOUND, format!("Group {} not found", id)),
+            BillioError::AlreadyGroupMember(id) => {
                 (StatusCode::CONFLICT, format!("User {} is already a group member", id))
             }
-            SplitwiseError::NotGroupMember(id) => (StatusCode::FORBIDDEN, format!("User {} is not a group member", id)),
-            SplitwiseError::NotGroupOwner(id) => (StatusCode::FORBIDDEN, format!("User {} is not group owner", id)),
-            SplitwiseError::InvalidOwnerCount(count) => {
+            BillioError::NotGroupMember(id) => (StatusCode::FORBIDDEN, format!("User {} is not a group member", id)),
+            BillioError::NotGroupOwner(id) => (StatusCode::FORBIDDEN, format!("User {} is not group owner", id)),
+            BillioError::InvalidOwnerCount(count) => {
                 (StatusCode::BAD_REQUEST, format!("Invalid owner count: {}", count))
             }
-            SplitwiseError::OwnerCannotRemoveSelf => {
-                (StatusCode::FORBIDDEN, "Owner cannot remove themselves".to_string())
-            }
-            SplitwiseError::CannotRemoveLastMember => {
+            BillioError::OwnerCannotRemoveSelf => (StatusCode::FORBIDDEN, "Owner cannot remove themselves".to_string()),
+            BillioError::CannotRemoveLastMember => {
                 (StatusCode::BAD_REQUEST, "Cannot remove last group member".to_string())
             }
-            SplitwiseError::InvalidJoinLink => (StatusCode::BAD_REQUEST, "Invalid join link".to_string()),
-            SplitwiseError::JoinLinkNotFound => (StatusCode::NOT_FOUND, "Join link not found".to_string()),
-            SplitwiseError::InvalidSplit => (StatusCode::BAD_REQUEST, "Invalid split amounts".to_string()),
-            SplitwiseError::InvalidSplitUser(id) => (
+            BillioError::InvalidJoinLink => (StatusCode::BAD_REQUEST, "Invalid join link".to_string()),
+            BillioError::JoinLinkNotFound => (StatusCode::NOT_FOUND, "Join link not found".to_string()),
+            BillioError::InvalidSplit => (StatusCode::BAD_REQUEST, "Invalid split amounts".to_string()),
+            BillioError::InvalidSplitUser(id) => (
                 StatusCode::BAD_REQUEST,
                 format!("User {} is not a group member for split", id),
             ),
-            SplitwiseError::TransactionNotFound(id) => (StatusCode::NOT_FOUND, format!("Transaction {} not found", id)),
-            SplitwiseError::SelfSettlement => (StatusCode::BAD_REQUEST, "Cannot create settlement to self".to_string()),
-            SplitwiseError::InvalidSettlementAmount => (
+            BillioError::TransactionNotFound(id) => (StatusCode::NOT_FOUND, format!("Transaction {} not found", id)),
+            BillioError::SelfSettlement => (StatusCode::BAD_REQUEST, "Cannot create settlement to self".to_string()),
+            BillioError::InvalidSettlementAmount => (
                 StatusCode::BAD_REQUEST,
                 "Settlement amount must be positive".to_string(),
             ),
-            SplitwiseError::InvalidSettlementTransaction(id) => (
+            BillioError::InvalidSettlementTransaction(id) => (
                 StatusCode::BAD_REQUEST,
                 format!("Invalid transaction {} for settlement", id),
             ),
-            SplitwiseError::SettlementNotFound(id) => (StatusCode::NOT_FOUND, format!("Settlement {} not found", id)),
-            SplitwiseError::SettlementAlreadyConfirmed(id) => {
+            BillioError::SettlementNotFound(id) => (StatusCode::NOT_FOUND, format!("Settlement {} not found", id)),
+            BillioError::SettlementAlreadyConfirmed(id) => {
                 (StatusCode::CONFLICT, format!("Settlement {} already confirmed", id))
             }
-            SplitwiseError::UnauthorizedSettlementConfirmation(id) => (
+            BillioError::UnauthorizedSettlementConfirmation(id) => (
                 StatusCode::FORBIDDEN,
                 format!("User {} not authorized to confirm settlement", id),
             ),
-            SplitwiseError::TransactionAlreadyReversed(id) => (
+            BillioError::TransactionAlreadyReversed(id) => (
                 StatusCode::CONFLICT,
                 format!("Transaction {} has already been reversed", id),
             ),
-            SplitwiseError::InvalidEmail(email) => (StatusCode::BAD_REQUEST, format!("Invalid email: {}", email)),
-            SplitwiseError::InvalidInput(field, msg) => (
+            BillioError::InvalidEmail(email) => (StatusCode::BAD_REQUEST, format!("Invalid email: {}", email)),
+            BillioError::InvalidInput(field, msg) => (
                 StatusCode::BAD_REQUEST,
                 format!("Invalid input for {}: {:?}", field, msg),
             ),
-            SplitwiseError::InternalServerError(msg) => (
+            BillioError::InternalServerError(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Internal server error: {}", msg),
             ),
-            SplitwiseError::StorageError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {}", msg)),
-            SplitwiseError::LoggingError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Logging error: {}", msg)),
-            SplitwiseError::DatabaseError(msg) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", msg))
-            }
-            SplitwiseError::UnexpectedError(msg) => {
+            BillioError::StorageError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {}", msg)),
+            BillioError::LoggingError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Logging error: {}", msg)),
+            BillioError::DatabaseError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", msg)),
+            BillioError::UnexpectedError(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Unexpected error: {}", msg))
             }
-            SplitwiseError::CacheError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Cache error: {}", msg)),
+            BillioError::CacheError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Cache error: {}", msg)),
         };
         (status, Json(ErrorResponse { error: error_message })).into_response()
     }
@@ -255,7 +251,7 @@ impl IntoResponse for ApiError {
     )
 )]
 async fn create_user(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<StatusCode, ApiError> {
     let user = User {
@@ -268,7 +264,7 @@ async fn create_user(
             service
                 .get_user(id)
                 .await?
-                .ok_or_else(|| SplitwiseError::UserNotFound(id.clone()))?,
+                .ok_or_else(|| BillioError::UserNotFound(id.clone()))?,
         )
     } else {
         None
@@ -290,13 +286,13 @@ async fn create_user(
     )
 )]
 async fn get_user(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(user_id): Path<String>,
 ) -> Result<Json<User>, ApiError> {
     let user = service
         .get_user(&user_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(user_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(user_id))?;
     Ok(Json(user))
 }
 
@@ -312,13 +308,13 @@ async fn get_user(
     )
 )]
 async fn create_group(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<CreateGroupRequest>,
 ) -> Result<Json<Group>, ApiError> {
     let created_by = service
         .get_user(&req.created_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.created_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.created_by_id))?;
     let members = req
         .member_ids
         .into_iter()
@@ -326,7 +322,7 @@ async fn create_group(
             service
                 .get_user(&id)
                 .await?
-                .ok_or_else(|| SplitwiseError::UserNotFound(id))
+                .ok_or_else(|| BillioError::UserNotFound(id))
         })
         .collect::<Vec<_>>();
     let members = futures::future::try_join_all(members).await?;
@@ -350,14 +346,14 @@ async fn create_group(
     )
 )]
 async fn delete_group(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<DeleteGroupRequest>,
 ) -> Result<StatusCode, ApiError> {
     let deleted_by = service
         .get_user(&req.deleted_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.deleted_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.deleted_by_id))?;
     service.delete_group(&group_id, &deleted_by).await?;
     Ok(StatusCode::OK)
 }
@@ -374,13 +370,13 @@ async fn delete_group(
     )
 )]
 async fn join_group_by_link(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<JoinGroupRequest>,
 ) -> Result<StatusCode, ApiError> {
     let user = service
         .get_user(&req.user_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.user_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.user_id))?;
     service.join_group_by_link(&req.join_link, &user).await?;
     Ok(StatusCode::OK)
 }
@@ -402,18 +398,18 @@ async fn join_group_by_link(
     )
 )]
 async fn add_member_to_group(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<AddMemberRequest>,
 ) -> Result<StatusCode, ApiError> {
     let user = service
         .get_user(&req.user_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.user_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.user_id))?;
     let added_by = service
         .get_user(&req.added_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.added_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.added_by_id))?;
     service.add_member_to_group(&group_id, user, &added_by).await?;
     Ok(StatusCode::OK)
 }
@@ -435,14 +431,14 @@ async fn add_member_to_group(
 )]
 
 async fn add_member_by_email(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<AddMemberByEmailRequest>,
 ) -> Result<StatusCode, ApiError> {
     let added_by = service
         .get_user(&req.added_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.added_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.added_by_id))?;
     service.add_member_by_email(&group_id, &req.email, &added_by).await?;
     Ok(StatusCode::OK)
 }
@@ -463,14 +459,14 @@ async fn add_member_by_email(
     )
 )]
 async fn remove_member_from_group(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<RemoveMemberRequest>,
 ) -> Result<StatusCode, ApiError> {
     let removed_by = service
         .get_user(&req.removed_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.removed_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.removed_by_id))?;
     service
         .remove_member_from_group(&group_id, &req.user_id, &removed_by)
         .await?;
@@ -492,14 +488,14 @@ async fn remove_member_from_group(
     )
 )]
 async fn revoke_join_link(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<RevokeJoinLinkRequest>,
 ) -> Result<StatusCode, ApiError> {
     let revoked_by = service
         .get_user(&req.revoked_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.revoked_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.revoked_by_id))?;
     service.revoke_join_link(&group_id, &revoked_by).await?;
     Ok(StatusCode::OK)
 }
@@ -519,14 +515,14 @@ async fn revoke_join_link(
     )
 )]
 async fn regenerate_join_link(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<RegenerateJoinLinkRequest>,
 ) -> Result<Json<String>, ApiError> {
     let regenerated_by = service
         .get_user(&req.regenerated_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.regenerated_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.regenerated_by_id))?;
     let new_link = service.regenerate_join_link(&group_id, &regenerated_by).await?;
     Ok(Json(new_link))
 }
@@ -546,14 +542,14 @@ async fn regenerate_join_link(
     )
 )]
 async fn toggle_strict_settlement_mode(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<ToggleStrictModeRequest>,
 ) -> Result<StatusCode, ApiError> {
     let toggled_by = service
         .get_user(&req.toggled_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.toggled_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.toggled_by_id))?;
     service
         .toggle_strict_settlement_mode(&group_id, req.enabled, &toggled_by)
         .await?;
@@ -575,18 +571,18 @@ async fn toggle_strict_settlement_mode(
     )
 )]
 async fn transfer_ownership(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
     Json(req): Json<TransferOwnershipRequest>,
 ) -> Result<StatusCode, ApiError> {
     let new_owner = service
         .get_user(&req.new_owner_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.new_owner_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.new_owner_id))?;
     let transferred_by = service
         .get_user(&req.transferred_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.transferred_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.transferred_by_id))?;
     service
         .transfer_ownership(&group_id, &new_owner, &transferred_by)
         .await?;
@@ -605,17 +601,17 @@ async fn transfer_ownership(
     )
 )]
 async fn add_expense(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<AddExpenseRequest>,
 ) -> Result<Json<Transaction>, ApiError> {
     let paid_by = service
         .get_user(&req.paid_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.paid_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.paid_by_id))?;
     let created_by = service
         .get_user(&req.created_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.created_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.created_by_id))?;
     let transaction = service
         .add_expense(
             &req.group_id,
@@ -642,13 +638,13 @@ async fn add_expense(
     )
 )]
 async fn reverse_transaction(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<ReverseTransactionRequest>,
 ) -> Result<Json<Transaction>, ApiError> {
     let reversed_by = service
         .get_user(&req.reversed_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.reversed_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.reversed_by_id))?;
     let reversal = service.reverse_transaction(&req.transaction_id, &reversed_by).await?;
     Ok(Json(reversal))
 }
@@ -666,21 +662,21 @@ async fn reverse_transaction(
     )
 )]
 async fn create_settlement(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<CreateSettlementRequest>,
 ) -> Result<Json<Settlement>, ApiError> {
     let from_user = service
         .get_user(&req.from_user_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.from_user_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.from_user_id))?;
     let to_user = service
         .get_user(&req.to_user_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.to_user_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.to_user_id))?;
     let created_by = service
         .get_user(&req.created_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.created_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.created_by_id))?;
     let settlement = service
         .create_settlement(
             &req.group_id,
@@ -709,13 +705,13 @@ async fn create_settlement(
     )
 )]
 async fn confirm_settlement(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<ConfirmSettlementRequest>,
 ) -> Result<StatusCode, ApiError> {
     let confirmed_by = service
         .get_user(&req.confirmed_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.confirmed_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.confirmed_by_id))?;
     service.confirm_settlement(&req.settlement_id, &confirmed_by).await?;
     Ok(StatusCode::OK)
 }
@@ -731,13 +727,13 @@ async fn confirm_settlement(
     )
 )]
 async fn get_pending_settlements(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<GetPendingSettlementsRequest>,
 ) -> Result<Json<Vec<Settlement>>, ApiError> {
     let user = service
         .get_user(&req.user_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.user_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.user_id))?;
     let settlements = service.get_pending_settlements(&req.group_id, &user).await?;
     Ok(Json(settlements))
 }
@@ -753,13 +749,13 @@ async fn get_pending_settlements(
     )
 )]
 async fn get_user_balances(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<GetUserBalancesRequest>,
 ) -> Result<Json<UserBalancesResponse>, ApiError> {
     let queried_by = service
         .get_user(&req.queried_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.queried_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.queried_by_id))?;
     let balances = service.get_user_balances(&req.user_id, &queried_by).await?;
     Ok(Json(balances))
 }
@@ -775,13 +771,13 @@ async fn get_user_balances(
     )
 )]
 async fn get_effective_transactions(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<GetEffectiveTransactionsRequest>,
 ) -> Result<Json<Vec<Transaction>>, ApiError> {
     let queried_by = service
         .get_user(&req.queried_by_id)
         .await?
-        .ok_or_else(|| SplitwiseError::UserNotFound(req.queried_by_id))?;
+        .ok_or_else(|| BillioError::UserNotFound(req.queried_by_id))?;
     let transactions = service.get_effective_transactions(&req.group_id, &queried_by).await?;
     Ok(Json(transactions))
 }
@@ -795,7 +791,7 @@ async fn get_effective_transactions(
     )
 )]
 async fn get_app_logs(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
 ) -> Result<Json<Vec<AppLog>>, ApiError> {
     let logs = service.get_app_logs().await?;
     Ok(Json(logs))
@@ -814,7 +810,7 @@ async fn get_app_logs(
     )
 )]
 async fn get_group_audits(
-    State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
+    State(service): State<Arc<BillioService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
 ) -> Result<Json<Vec<GroupAudit>>, ApiError> {
     let audits = service.get_group_audits(&group_id).await?;
@@ -876,7 +872,7 @@ async fn get_group_audits(
         UserBalancesResponse
     )),
     info(
-        title = "Splitwise API",
+        title = "Billio API",
         description = "API for managing group expenses and settlements",
         version = "0.1.0"
     )
@@ -892,7 +888,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache = InMemoryCache::new();
     let storage = InMemoryStorage::new();
     let logging = InMemoryLogging::new();
-    let splitwise = Arc::new(SplitwiseService::new(storage, logging, cache));
+    let billio = Arc::new(BillioService::new(storage, logging, cache));
 
     // Define API routes
     let app = Router::new()
@@ -930,7 +926,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .allow_headers([header::CONTENT_TYPE]),
         )
         .layer(TraceLayer::new_for_http()) // Request tracing
-        .with_state(splitwise);
+        .with_state(billio);
 
     // Start server
     let addr = SocketAddr::from(([127, 0, 0, 1], CONFIG.port));

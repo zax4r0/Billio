@@ -1,6 +1,6 @@
 pub mod in_memory;
 
-use crate::error::SplitwiseError;
+use crate::error::BillioError;
 use crate::models::audit::AppLog;
 use async_trait::async_trait;
 
@@ -11,6 +11,6 @@ pub trait LoggingService: Send + Sync {
         action: &str,
         details: serde_json::Value,
         user_id: Option<&str>,
-    ) -> Result<(), SplitwiseError>;
-    async fn get_logs(&self) -> Result<Vec<AppLog>, SplitwiseError>;
+    ) -> Result<(), BillioError>;
+    async fn get_logs(&self) -> Result<Vec<AppLog>, BillioError>;
 }

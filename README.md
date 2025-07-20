@@ -1,4 +1,4 @@
-# Splitwise Clone
+# Billio
 
 A Rust implementation of a Splitwise-like expense sharing system.
 

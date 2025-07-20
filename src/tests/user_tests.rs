@@ -1,8 +1,8 @@
 use crate::cache::in_memory_cache::InMemoryCache;
-use crate::error::SplitwiseError;
+use crate::error::BillioError;
 use crate::logger::in_memory::InMemoryLogging;
 use crate::models::user::User;
-use crate::service::SplitwiseService;
+use crate::service::BillioService;
 use crate::storage::in_memory::InMemoryStorage;
 
 #[tokio::test]
@@ -10,18 +10,15 @@ async fn test_add_user() {
     let cache = InMemoryCache::new();
     let storage = InMemoryStorage::new();
     let logging = InMemoryLogging::new();
-    let splitwise = SplitwiseService::new(storage, logging, cache);
+    let billio = BillioService::new(storage, logging, cache);
 
     let user = User {
         id: "u1".to_string(),
         name: "Alice".to_string(),
         email: "alice@example.com".to_string(),
     };
-    splitwise.add_user(user.clone(), None).await.unwrap();
-    assert_eq!(
-        splitwise.get_user("u1").await.unwrap().unwrap().email,
-        "alice@example.com"
-    );
+    billio.add_user(user.clone(), None).await.unwrap();
+    assert_eq!(billio.get_user("u1").await.unwrap().unwrap().email, "alice@example.com");
 }
 
 #[tokio::test]
@@ -29,7 +26,7 @@ async fn test_duplicate_email() {
     let cache = InMemoryCache::new();
     let storage = InMemoryStorage::new();
     let logging = InMemoryLogging::new();
-    let splitwise = SplitwiseService::new(storage, logging, cache);
+    let billio = BillioService::new(storage, logging, cache);
 
     let user1 = User {
         id: "u1".to_string(),
@@ -41,7 +38,7 @@ async fn test_duplicate_email() {
         name: "Bob".to_string(),
         email: "alice@example.com".to_string(),
     };
-    splitwise.add_user(user1, None).await.unwrap();
-    let result = splitwise.add_user(user2, None).await;
-    assert!(matches!(result, Err(SplitwiseError::EmailAlreadyRegistered(_))));
+    billio.add_user(user1, None).await.unwrap();
+    let result = billio.add_user(user2, None).await;
+    assert!(matches!(result, Err(BillioError::EmailAlreadyRegistered(_))));
 }
