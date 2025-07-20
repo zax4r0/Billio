@@ -31,9 +31,11 @@ use tower_http::{
     trace::TraceLayer,
 };
 use tracing::info;
+use utoipa::{OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 
 // Request structs for JSON payloads
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct CreateUserRequest {
     id: String,
     name: String,
@@ -41,60 +43,60 @@ struct CreateUserRequest {
     created_by_id: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct CreateGroupRequest {
     name: String,
     member_ids: Vec<String>,
     created_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct AddMemberRequest {
     user_id: String,
     added_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct AddMemberByEmailRequest {
     email: String,
     added_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct RemoveMemberRequest {
     user_id: String,
     removed_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct JoinGroupRequest {
     join_link: String,
     user_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct RevokeJoinLinkRequest {
     revoked_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct RegenerateJoinLinkRequest {
     regenerated_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct ToggleStrictModeRequest {
     enabled: bool,
     toggled_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct TransferOwnershipRequest {
     new_owner_id: String,
     transferred_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct AddExpenseRequest {
     group_id: String,
     description: String,
@@ -104,13 +106,13 @@ struct AddExpenseRequest {
     created_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct ReverseTransactionRequest {
     transaction_id: String,
     reversed_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct CreateSettlementRequest {
     group_id: String,
     from_user_id: String,
@@ -121,37 +123,37 @@ struct CreateSettlementRequest {
     created_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct ConfirmSettlementRequest {
     settlement_id: String,
     confirmed_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct GetPendingSettlementsRequest {
     group_id: String,
     user_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct DeleteGroupRequest {
     deleted_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct GetUserBalancesRequest {
     user_id: String,
     queried_by_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct GetEffectiveTransactionsRequest {
     group_id: String,
     queried_by_id: String,
 }
 
 // Error response struct
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct ErrorResponse {
     error: String,
 }
@@ -240,6 +242,18 @@ impl IntoResponse for ApiError {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/users",
+    request_body = CreateUserRequest,
+    responses(
+        (status = 201, description = "User created successfully"),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 409, description = "Email already registered", body = ErrorResponse),
+        (status = 404, description = "Created by user not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn create_user(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<CreateUserRequest>,
@@ -263,6 +277,18 @@ async fn create_user(
     Ok(StatusCode::CREATED)
 }
 
+#[utoipa::path(
+    get,
+    path = "/users/{user_id}",
+    params(
+        ("user_id" = String, Path, description = "ID of the user to retrieve")
+    ),
+    responses(
+        (status = 200, description = "User retrieved successfully", body = User),
+        (status = 404, description = "User not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn get_user(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(user_id): Path<String>,
@@ -274,6 +300,17 @@ async fn get_user(
     Ok(Json(user))
 }
 
+#[utoipa::path(
+    post,
+    path = "/groups",
+    request_body = CreateGroupRequest,
+    responses(
+        (status = 200, description = "Group created successfully", body = Group),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 404, description = "User not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn create_group(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<CreateGroupRequest>,
@@ -297,6 +334,21 @@ async fn create_group(
     Ok(Json(group))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/groups/{group_id}",
+    request_body = DeleteGroupRequest,
+    params(
+        ("group_id" = String, Path, description = "ID of the group to delete")
+    ),
+    responses(
+        (status = 200, description = "Group deleted successfully",),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 403, description = "Not group owner", body = ErrorResponse),
+        (status = 404, description = "Group or user not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn delete_group(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
@@ -310,6 +362,17 @@ async fn delete_group(
     Ok(StatusCode::OK)
 }
 
+#[utoipa::path(
+    post,
+    path = "/groups/join",
+    request_body = JoinGroupRequest,
+    responses(
+        (status = 200, description = "Joined group successfully",),
+        (status = 400, description = "Invalid join link", body = ErrorResponse),
+        (status = 404, description = "User or join link not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn join_group_by_link(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<JoinGroupRequest>,
@@ -322,6 +385,22 @@ async fn join_group_by_link(
     Ok(StatusCode::OK)
 }
 
+#[utoipa::path(
+    post,
+    path = "/groups/{group_id}/members",
+    request_body = AddMemberRequest,
+    params(
+        ("group_id" = String, Path, description = "ID of the group")
+    ),
+    responses(
+        (status = 200, description = "Member added successfully"),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 403, description = "Not authorized", body = ErrorResponse),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 409, description = "User already a member", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn add_member_to_group(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
@@ -339,6 +418,22 @@ async fn add_member_to_group(
     Ok(StatusCode::OK)
 }
 
+#[utoipa::path(
+    post,
+    path = "/groups/{group_id}/members/email",
+    request_body = AddMemberByEmailRequest,
+    params(
+        ("group_id" = String, Path, description = "ID of the group")
+    ),
+    responses(
+        (status = 200, description = "Member added successfully"),
+        (status = 400, description = "Invalid email", body = ErrorResponse),
+        (status = 403, description = "Not authorized", body = ErrorResponse),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+
 async fn add_member_by_email(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
@@ -352,6 +447,21 @@ async fn add_member_by_email(
     Ok(StatusCode::OK)
 }
 
+#[utoipa::path(
+    post,
+    path = "/groups/{group_id}/members/remove",
+    request_body = RemoveMemberRequest,
+    params(
+        ("group_id" = String, Path, description = "ID of the group")
+    ),
+    responses(
+        (status = 200, description = "Member removed successfully"),
+        (status = 400, description = "Cannot remove last member or owner", body = ErrorResponse),
+        (status = 403, description = "Not authorized", body = ErrorResponse),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn remove_member_from_group(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
@@ -367,6 +477,20 @@ async fn remove_member_from_group(
     Ok(StatusCode::OK)
 }
 
+#[utoipa::path(
+    post,
+    path = "/groups/{group_id}/join_link/revoke",
+    request_body = RevokeJoinLinkRequest,
+    params(
+        ("group_id" = String, Path, description = "ID of the group")
+    ),
+    responses(
+        (status = 200, description = "Join link revoked successfully"),
+        (status = 403, description = "Not authorized", body = ErrorResponse),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn revoke_join_link(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
@@ -380,6 +504,20 @@ async fn revoke_join_link(
     Ok(StatusCode::OK)
 }
 
+#[utoipa::path(
+    post,
+    path = "/groups/{group_id}/join_link/regenerate",
+    request_body = RegenerateJoinLinkRequest,
+    params(
+        ("group_id" = String, Path, description = "ID of the group")
+    ),
+    responses(
+        (status = 200, description = "Join link regenerated successfully", body = String),
+        (status = 403, description = "Not authorized", body = ErrorResponse),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn regenerate_join_link(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
@@ -393,6 +531,20 @@ async fn regenerate_join_link(
     Ok(Json(new_link))
 }
 
+#[utoipa::path(
+    post,
+    path = "/groups/{group_id}/strict_mode",
+    request_body = ToggleStrictModeRequest,
+    params(
+        ("group_id" = String, Path, description = "ID of the group")
+    ),
+    responses(
+        (status = 200, description = "Strict mode toggled successfully"),
+        (status = 403, description = "Not authorized", body = ErrorResponse),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn toggle_strict_settlement_mode(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
@@ -408,6 +560,20 @@ async fn toggle_strict_settlement_mode(
     Ok(StatusCode::OK)
 }
 
+#[utoipa::path(
+    post,
+    path = "/groups/{group_id}/ownership",
+    request_body = TransferOwnershipRequest,
+    params(
+        ("group_id" = String, Path, description = "ID of the group")
+    ),
+    responses(
+        (status = 200, description = "Ownership transferred successfully"),
+        (status = 403, description = "Not authorized", body = ErrorResponse),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn transfer_ownership(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
@@ -427,6 +593,17 @@ async fn transfer_ownership(
     Ok(StatusCode::OK)
 }
 
+#[utoipa::path(
+    post,
+    path = "/expenses",
+    request_body = AddExpenseRequest,
+    responses(
+        (status = 200, description = "Expense added successfully", body = Transaction),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn add_expense(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<AddExpenseRequest>,
@@ -452,6 +629,18 @@ async fn add_expense(
     Ok(Json(transaction))
 }
 
+#[utoipa::path(
+    post,
+    path = "/transactions/reverse",
+    request_body = ReverseTransactionRequest,
+    responses(
+        (status = 200, description = "Transaction reversed successfully", body = Transaction),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 404, description = "Transaction or user not found", body = ErrorResponse),
+        (status = 409, description = "Transaction already reversed", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn reverse_transaction(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<ReverseTransactionRequest>,
@@ -464,6 +653,18 @@ async fn reverse_transaction(
     Ok(Json(reversal))
 }
 
+#[utoipa::path(
+    post,
+    path = "/settlements",
+    request_body = CreateSettlementRequest,
+    responses(
+        (status = 200, description = "Settlement created successfully", body = Settlement),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 409, description = "Self settlement or invalid transaction", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn create_settlement(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<CreateSettlementRequest>,
@@ -494,6 +695,19 @@ async fn create_settlement(
     Ok(Json(settlement))
 }
 
+#[utoipa::path(
+    post,
+    path = "/settlements/confirm",
+    request_body = ConfirmSettlementRequest,
+    responses(
+        (status = 200, description = "Settlement confirmed successfully"),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 403, description = "Not authorized", body = ErrorResponse),
+        (status = 404, description = "Settlement or user not found", body = ErrorResponse),
+        (status = 409, description = "Settlement already confirmed", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn confirm_settlement(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<ConfirmSettlementRequest>,
@@ -506,6 +720,16 @@ async fn confirm_settlement(
     Ok(StatusCode::OK)
 }
 
+#[utoipa::path(
+    post,
+    path = "/settlements/pending",
+    request_body = GetPendingSettlementsRequest,
+    responses(
+        (status = 200, description = "Pending settlements retrieved successfully", body = Vec<Settlement>),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn get_pending_settlements(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<GetPendingSettlementsRequest>,
@@ -518,6 +742,16 @@ async fn get_pending_settlements(
     Ok(Json(settlements))
 }
 
+#[utoipa::path(
+    post,
+    path = "/balances",
+    request_body = GetUserBalancesRequest,
+    responses(
+        (status = 200, description = "User balances retrieved successfully", body = UserBalancesResponse),
+        (status = 404, description = "User not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn get_user_balances(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<GetUserBalancesRequest>,
@@ -530,6 +764,16 @@ async fn get_user_balances(
     Ok(Json(balances))
 }
 
+#[utoipa::path(
+    post,
+    path = "/transactions/effective",
+    request_body = GetEffectiveTransactionsRequest,
+    responses(
+        (status = 200, description = "Effective transactions retrieved successfully", body = Vec<Transaction>),
+        (status = 404, description = "User or group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn get_effective_transactions(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Json(req): Json<GetEffectiveTransactionsRequest>,
@@ -542,6 +786,14 @@ async fn get_effective_transactions(
     Ok(Json(transactions))
 }
 
+#[utoipa::path(
+    get,
+    path = "/logs",
+    responses(
+        (status = 200, description = "Application logs retrieved successfully", body = Vec<AppLog>),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn get_app_logs(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
 ) -> Result<Json<Vec<AppLog>>, ApiError> {
@@ -549,6 +801,18 @@ async fn get_app_logs(
     Ok(Json(logs))
 }
 
+#[utoipa::path(
+    get,
+    path = "/groups/{group_id}/audits",
+    params(
+        ("group_id" = String, Path, description = "ID of the group")
+    ),
+    responses(
+        (status = 200, description = "Group audits retrieved successfully", body = Vec<GroupAudit>),
+        (status = 404, description = "Group not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
 async fn get_group_audits(
     State(service): State<Arc<SplitwiseService<InMemoryLogging, InMemoryStorage, InMemoryCache>>>,
     Path(group_id): Path<String>,
@@ -556,6 +820,68 @@ async fn get_group_audits(
     let audits = service.get_group_audits(&group_id).await?;
     Ok(Json(audits))
 }
+
+// Define OpenAPI schema
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        create_user,
+        get_user,
+        create_group,
+        delete_group,
+        join_group_by_link,
+        add_member_to_group,
+        add_member_by_email,
+        remove_member_from_group,
+        revoke_join_link,
+        regenerate_join_link,
+        toggle_strict_settlement_mode,
+        transfer_ownership,
+        add_expense,
+        reverse_transaction,
+        create_settlement,
+        confirm_settlement,
+        get_pending_settlements,
+        get_user_balances,
+        get_effective_transactions,
+        get_app_logs,
+        get_group_audits
+    ),
+    components(schemas(
+        CreateUserRequest,
+        CreateGroupRequest,
+        AddMemberRequest,
+        AddMemberByEmailRequest,
+        RemoveMemberRequest,
+        JoinGroupRequest,
+        RevokeJoinLinkRequest,
+        RegenerateJoinLinkRequest,
+        ToggleStrictModeRequest,
+        TransferOwnershipRequest,
+        AddExpenseRequest,
+        ReverseTransactionRequest,
+        CreateSettlementRequest,
+        ConfirmSettlementRequest,
+        GetPendingSettlementsRequest,
+        DeleteGroupRequest,
+        GetUserBalancesRequest,
+        GetEffectiveTransactionsRequest,
+        ErrorResponse,
+        User,
+        Group,
+        Settlement,
+        Transaction,
+        AppLog,
+        GroupAudit,
+        UserBalancesResponse
+    )),
+    info(
+        title = "Splitwise API",
+        description = "API for managing group expenses and settlements",
+        version = "0.1.0"
+    )
+)]
+struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -570,7 +896,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Define API routes
     let app = Router::new()
-        // add / route with a simple health check
+        // Health check endpoint
         .route("/", get(|| async { "OK" }))
         .route("/users", post(create_user))
         .route("/users/{user_id}", get(get_user))
@@ -593,6 +919,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/transactions/effective", post(get_effective_transactions))
         .route("/logs", get(get_app_logs))
         .route("/groups/{group_id}/audits", get(get_group_audits))
+        // Add Swagger UI route
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(CompressionLayer::new()) // Gzip compression
         .layer(TimeoutLayer::new(Duration::from_secs(30))) // 30-second timeout
         .layer(
@@ -607,6 +935,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start server
     let addr = SocketAddr::from(([127, 0, 0, 1], CONFIG.port));
     info!("Server running at http://{}", addr);
+    // swagger UI will be available at http://<host>:<port>/swagger-ui
+    info!("Swagger UI available at http://{}/swagger-ui", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 

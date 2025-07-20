@@ -1,7 +1,8 @@
 use super::user::User;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")] // Ensures JSON uses "OWNER" / "MEMBER"
 pub enum Role {
     Owner,
@@ -18,13 +19,13 @@ impl std::fmt::Display for Role {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct GroupMember {
     pub user: User,
     pub role: Role,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct Group {
     pub id: String,
     pub name: String,

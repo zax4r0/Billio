@@ -15,9 +15,10 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, ToSchema)]
 pub struct UserBalancesResponse {
     circular_balances: Vec<Balance>,
     minimized_balances: Vec<Balance>,
